@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Galaxy Menu">
+<meta name="theme-color" content="#1a0a0a">
+<title>Galaxy Restaurant — Menu</title>
+<link rel="manifest" href="#" />
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#1a0a0a;--bg2:#231010;--bg3:#2e1515;--card:#2a1212;--card2:#341818;
+  --gold:#e8a045;--gold2:#f5c878;--gold3:#b87820;--amber:#d4813a;
+  --text:#f5e8d0;--text2:#c4a882;--text3:#8a7060;
+  --success:#5aaa80;--danger:#e05555;
+  --border:rgba(232,160,69,0.15);--border2:rgba(232,160,69,0.3);
+  --shadow:0 8px 32px rgba(0,0,0,0.5);--radius:14px;--radius2:8px;
+  --font-head:'Playfair Display',Georgia,serif;--font-body:'Lato',sans-serif;
+  --t:0.18s cubic-bezier(0.4,0,0.2,1);
+}
+html{scroll-behavior:smooth}
+body{font-family:var(--font-body);background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+
+/* HERO */
+.hero{background:var(--bg2);padding:28px 20px 20px;text-align:center;position:relative;border-bottom:1px solid var(--border);overflow:hidden}
+.hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 60% 40% at 50% 0%,rgba(232,160,69,0.1) 0%,transparent 70%);pointer-events:none}
+.hero-badge{font-size:10px;letter-spacing:4px;color:var(--gold3);text-transform:uppercase;font-weight:700;margin-bottom:6px}
+.hero-logo{font-family:var(--font-head);font-size:clamp(28px,7vw,42px);font-weight:700;color:var(--gold);line-height:1.1}
+.hero-logo span{color:var(--text);font-style:italic;font-weight:400}
+.hero-tagline{font-size:13px;color:var(--text2);margin:6px 0 18px;letter-spacing:0.5px}
+.table-pill{display:inline-flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border2);border-radius:30px;padding:8px 18px}
+.table-pill label{font-size:12px;color:var(--text2);font-weight:700;letter-spacing:0.5px}
+.table-pill input{background:none;border:none;outline:none;color:var(--gold);font-family:var(--font-head);font-size:15px;font-weight:600;width:42px;text-align:center}
+.table-pill input::-webkit-inner-spin-button{-webkit-appearance:none}
+
+/* CATEGORY BAR */
+.cat-bar{display:flex;gap:8px;padding:14px 16px;overflow-x:auto;background:var(--bg2);border-bottom:1px solid var(--border);scrollbar-width:none;position:sticky;top:0;z-index:10}
+.cat-bar::-webkit-scrollbar{display:none}
+.cat-btn{background:var(--bg3);border:1px solid var(--border);color:var(--text2);padding:7px 18px;border-radius:24px;cursor:pointer;white-space:nowrap;font-size:13px;font-weight:700;letter-spacing:0.3px;transition:all var(--t);flex-shrink:0}
+.cat-btn:hover{border-color:var(--gold3);color:var(--gold)}
+.cat-btn.active{background:var(--gold);border-color:var(--gold);color:var(--bg)}
+
+/* SECTION HEADER */
+.cat-section-title{font-family:var(--font-head);font-size:18px;font-weight:700;color:var(--gold);padding:20px 14px 10px;border-bottom:1px solid var(--border);margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.cat-section-title::before{content:'';display:inline-block;width:4px;height:18px;background:var(--gold);border-radius:2px}
+
+/* MENU GRID */
+.menu-section{padding:8px 12px 140px}
+.menu-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+@media(min-width:520px){.menu-grid{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:768px){.menu-grid{grid-template-columns:repeat(4,1fr)}}
+
+/* FOOD CARD */
+.food-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;transition:transform var(--t),border-color var(--t),box-shadow var(--t);will-change:transform}
+.food-card:hover{transform:translateY(-3px);border-color:var(--border2);box-shadow:0 12px 28px rgba(0,0,0,0.5)}
+.food-img-wrap{background:var(--bg3);display:flex;align-items:center;justify-content:center;height:120px;position:relative;overflow:hidden}
+.food-img-wrap img{width:100%;height:100%;object-fit:cover;transition:transform 0.4s ease;display:block;position:relative;z-index:1}
+.food-card:hover .food-img-wrap img{transform:scale(1.07)}
+.food-img-wrap::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,transparent 40%,rgba(26,10,10,0.6) 100%);pointer-events:none;z-index:2}
+.oos-badge{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center}
+.oos-badge span{background:rgba(224,85,85,0.88);color:#fff;font-size:10px;font-weight:700;padding:4px 10px;border-radius:20px;letter-spacing:0.5px}
+.food-info{padding:10px}
+.food-name{font-family:var(--font-head);font-size:14px;font-weight:600;color:var(--text);margin-bottom:3px;line-height:1.3}
+.food-desc{font-size:11px;color:var(--text3);line-height:1.5;margin-bottom:9px}
+.food-footer{display:flex;align-items:center;justify-content:space-between}
+.food-price{font-family:var(--font-head);font-size:15px;font-weight:700;color:var(--gold)}
+.add-btn{background:var(--gold);border:none;color:var(--bg);width:30px;height:30px;border-radius:50%;font-size:22px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;font-weight:700;transition:transform 0.15s,background var(--t);flex-shrink:0}
+.add-btn:hover{transform:scale(1.12);background:var(--gold2)}
+.add-btn:active{transform:scale(0.95)}
+.qty-ctrl{display:flex;align-items:center;gap:6px}
+.qty-btn{background:var(--bg3);border:1px solid var(--border2);color:var(--gold);width:28px;height:28px;border-radius:50%;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-weight:700;transition:background var(--t);flex-shrink:0}
+.qty-btn:hover{background:var(--card2)}
+.qty-num{font-family:var(--font-head);font-size:15px;font-weight:600;color:var(--text);min-width:18px;text-align:center}
+.size-controls{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.size-row{display:flex;align-items:center;justify-content:space-between}
+.size-lbl{font-size:12px;color:var(--text2);font-weight:700}
+.size-price{color:var(--gold);font-family:var(--font-head);font-size:13px;margin-left:4px}
+.small-add{width:26px!important;height:26px!important;font-size:18px!important}
+.out-of-stock-card{opacity:0.55}
+
+/* CART FAB */
+.cart-fab{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) scale(0.85);background:var(--gold);color:var(--bg);border:none;padding:14px 28px;border-radius:40px;font-size:14px;font-weight:700;letter-spacing:0.3px;cursor:pointer;display:none;align-items:center;gap:12px;z-index:50;box-shadow:0 6px 24px rgba(232,160,69,0.4);transition:transform 0.2s cubic-bezier(0.34,1.56,0.64,1),box-shadow var(--t);white-space:nowrap}
+.cart-fab.show{display:flex;transform:translateX(-50%) scale(1)}
+.cart-fab:hover{box-shadow:0 8px 30px rgba(232,160,69,0.6);transform:translateX(-50%) scale(1.03)}
+.cart-fab.pulse{animation:fabPulse 0.4s ease}
+@keyframes fabPulse{0%{transform:translateX(-50%) scale(1)}40%{transform:translateX(-50%) scale(1.1)}100%{transform:translateX(-50%) scale(1)}}
+.cart-badge{background:var(--bg);color:var(--gold);border-radius:50%;width:24px;height:24px;font-size:12px;display:flex;align-items:center;justify-content:center;font-weight:700}
+.cart-total{font-size:15px}
+
+/* ORDER PANEL */
+.panel-overlay{position:fixed;inset:0;background:rgba(10,4,4,0.75);backdrop-filter:blur(4px);z-index:60;opacity:0;pointer-events:none;transition:opacity var(--t)}
+.panel-overlay.open{opacity:1;pointer-events:all}
+.order-panel{position:fixed;bottom:0;left:0;right:0;background:var(--bg2);border-radius:22px 22px 0 0;border-top:1px solid var(--border2);z-index:61;max-height:85vh;overflow-y:auto;transform:translateY(100%);transition:transform 0.22s cubic-bezier(0.4,0,0.2,1)}
+.order-panel.open{transform:translateY(0)}
+.panel-handle{width:42px;height:5px;background:var(--bg3);border-radius:4px;margin:14px auto 0}
+.panel-header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px 0}
+.panel-title{font-family:var(--font-head);font-size:20px;font-weight:700;color:var(--text)}
+.panel-close{background:var(--bg3);border:1px solid var(--border);color:var(--text2);width:32px;height:32px;border-radius:50%;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background var(--t)}
+.panel-close:hover{background:var(--card2);color:var(--text)}
+.panel-body{padding:16px 20px}
+.panel-item{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--border)}
+.panel-item:last-child{border-bottom:none}
+.panel-item-left{flex:1}
+.panel-item-name{font-size:14px;font-weight:700;color:var(--text)}
+.panel-item-meta{font-size:12px;color:var(--text3);margin-top:2px}
+.panel-item-price{font-family:var(--font-head);font-size:15px;font-weight:700;color:var(--gold);margin-left:12px}
+.panel-total-row{display:flex;justify-content:space-between;align-items:center;margin:14px 0 6px;padding:14px 0 0;border-top:1px solid var(--border2)}
+.panel-total-label{font-size:15px;font-weight:700;color:var(--text2);letter-spacing:0.3px}
+.panel-total-amount{font-family:var(--font-head);font-size:22px;font-weight:700;color:var(--gold)}
+
+/* CUSTOMER FIELDS */
+.cust-info-section{padding:14px 20px 0;border-top:1px solid var(--border);margin-top:4px}
+.cust-info-title{font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px}
+.cust-info-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.cust-info-full{grid-column:1/-1}
+.cust-field{display:flex;flex-direction:column;gap:4px}
+.cust-field label{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px}
+.cust-field input{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:var(--radius2);font-size:13px;outline:none;transition:border-color var(--t);width:100%}
+.cust-field input:focus{border-color:var(--gold3)}
+.cust-field input::placeholder{color:var(--text3)}
+
+/* PLACE ORDER BTN */
+.place-btn{width:100%;background:var(--gold);border:none;color:var(--bg);padding:16px;border-radius:var(--radius);font-size:16px;font-weight:700;letter-spacing:0.5px;cursor:pointer;margin-top:12px;margin-bottom:16px;transition:background var(--t),transform 0.15s}
+.place-btn:hover{background:var(--gold2)}
+.place-btn:active{transform:scale(0.98)}
+
+/* CONFIRM OVERLAY */
+.confirm-overlay{position:fixed;inset:0;background:rgba(10,4,4,0.88);backdrop-filter:blur(8px);z-index:80;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity 0.3s}
+.confirm-overlay.show{opacity:1;pointer-events:all}
+.confirm-box{background:var(--card);border:1px solid var(--gold3);border-radius:22px;padding:36px 28px;text-align:center;max-width:320px;width:90%;transform:scale(0.85);transition:transform 0.35s cubic-bezier(0.34,1.56,0.64,1)}
+.confirm-overlay.show .confirm-box{transform:scale(1)}
+.confirm-icon{font-size:60px;display:block;margin-bottom:12px}
+.confirm-title{font-family:var(--font-head);font-size:24px;font-weight:700;color:var(--gold);margin-bottom:8px}
+.confirm-sub{font-size:14px;color:var(--text2);line-height:1.6}
+.confirm-ok{margin-top:22px;background:var(--gold);border:none;color:var(--bg);padding:12px 32px;border-radius:24px;font-size:14px;font-weight:700;cursor:pointer;transition:background var(--t)}
+.confirm-ok:hover{background:var(--gold2)}
+#confetti-canvas{position:fixed;inset:0;z-index:79;pointer-events:none}
+
+/* TOAST */
+.toast{position:fixed;bottom:100px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--card2);border:1px solid var(--border2);color:var(--text);padding:10px 22px;border-radius:30px;font-size:13px;font-weight:700;z-index:200;opacity:0;transition:all 0.25s;white-space:nowrap;pointer-events:none}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* FOOTER NOTE */
+.footer-note{text-align:center;padding:32px 20px 60px;color:var(--text3);font-size:11px;letter-spacing:0.5px}
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-badge">✦ Fine Street Food ✦</div>
+  <div class="hero-logo">Galaxy <span>Restaurant</span></div>
+  <div class="hero-tagline">Scan. Order. Enjoy.</div>
+  <div class="table-pill">
+    <label>TABLE</label>
+    <input type="number" id="table-num" placeholder="—" min="1" max="99">
+  </div>
+</div>
+
+<!-- CATEGORY BAR -->
+<div class="cat-bar" id="cat-bar">
+  <button class="cat-btn active" data-cat="all">All</button>
+  <button class="cat-btn" data-cat="momos">🥟 Momos</button>
+  <button class="cat-btn" data-cat="noodles">🍜 Noodles</button>
+  <button class="cat-btn" data-cat="pizza">🍕 Pizza</button>
+  <button class="cat-btn" data-cat="burger">🍔 Burger</button>
+  <button class="cat-btn" data-cat="sandwich">🥪 Sandwich</button>
+  <button class="cat-btn" data-cat="snacks">🍟 Snacks</button>
+  <button class="cat-btn" data-cat="drinks">🧃 Drinks</button>
+</div>
+
+<!-- MENU -->
+<div class="menu-section">
+  <div id="menu-grid" class="menu-grid"></div>
+</div>
+
+<!-- CART FAB -->
+<button class="cart-fab" id="cart-fab" onclick="openPanel()">
+  <span class="cart-badge" id="cart-count">0</span>
+  <span>View Order</span>
+  <span class="cart-total" id="cart-total-fab">₹0</span>
+</button>
+
+<!-- PANEL OVERLAY -->
+<div class="panel-overlay" id="panel-overlay" onclick="closePanel()"></div>
+<div class="order-panel" id="order-panel">
+  <div class="panel-handle"></div>
+  <div class="panel-header">
+    <span class="panel-title">Your Order</span>
+    <button class="panel-close" onclick="closePanel()">✕</button>
+  </div>
+  <div class="panel-body">
+    <div id="panel-items"></div>
+    <div class="panel-total-row">
+      <span class="panel-total-label">TOTAL</span>
+      <span class="panel-total-amount" id="panel-total">₹0</span>
+    </div>
+  </div>
+  <div class="cust-info-section">
+    <div class="cust-info-title">Your Details</div>
+    <div class="cust-info-grid">
+      <div class="cust-field cust-info-full">
+        <label>Full Name *</label>
+        <input type="text" id="cust-name" placeholder="Your name">
+      </div>
+      <div class="cust-field">
+        <label>Phone *</label>
+        <input type="tel" id="cust-phone" placeholder="10-digit number" maxlength="10">
+      </div>
+      <div class="cust-field">
+        <label>Table No. *</label>
+        <input type="number" id="cust-table" placeholder="Table number">
+      </div>
+    </div>
+    <button class="place-btn" id="place-btn" onclick="placeOrder()">🛎️ Place Order</button>
+  </div>
+</div>
+
+<!-- CONFIRM -->
+<canvas id="confetti-canvas"></canvas>
+<div class="confirm-overlay" id="confirm-overlay">
+  <div class="confirm-box">
+    <span class="confirm-icon">🎉</span>
+    <div class="confirm-title">Order Placed!</div>
+    <div class="confirm-sub" id="confirm-msg">Your order is on its way to the kitchen!</div>
+    <button class="confirm-ok" onclick="closeConfirm()">Wonderful, Thanks!</button>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<div class="footer-note">Galaxy Restaurant &nbsp;•&nbsp; Order fresh, eat happy 🌟</div>
+
+<!-- Firebase SDK -->
+<script>
+/* ── FIREBASE COMPAT SDK (inline, REST polling — no CDN, no SSE) ──────────
+   Uses Firebase REST API for all reads/writes.
+   Real-time "on('value')" listeners poll every 1500ms (same as JSONBin fallback).
+   REQUIREMENT: Firebase Console → Realtime Database → Rules must be:
+   { "rules": { ".read": true, ".write": true } }
+─────────────────────────────────────────────────────────────────────────── */
+var firebase = (function() {
+  'use strict';
+  var _apps = [], _defaultApp = null;
+
+  function App(cfg) { this.options = cfg; this._db = null; }
+  App.prototype.database = function() {
+    if (!this._db) this._db = new Database(this.options.databaseURL);
+    return this._db;
+  };
+
+  function Database(baseURL) {
+    this._base = baseURL.replace(/\/$/, '');
+    this._listeners = {};
+  }
+  Database.prototype.ref = function(path) {
+    return new Ref(this, (path || '').replace(/^\/+/, ''));
+  };
+
+  function Ref(db, path) {
+    this._db = db; this.path = path;
+    this.key = path ? path.split('/').pop() : null;
+  }
+
+  Ref.prototype._url = function(qs) {
+    return this._db._base + '/' + this.path + '.json' + (qs ? '?' + qs : '');
+  };
+
+  function xhr(method, url, body, resolve, reject) {
+    var x = new XMLHttpRequest();
+    x.open(method, url);
+    if (body !== null) x.setRequestHeader('Content-Type', 'application/json');
+    x.onload = function() {
+      if (x.status >= 200 && x.status < 300) resolve(x.responseText);
+      else reject(new Error(method + ' ' + x.status + ': ' + x.responseText));
+    };
+    x.onerror = function() { reject(new Error('Network error (' + method + ' ' + url + ')')); };
+    x.ontimeout = function() { reject(new Error('Timeout (' + method + ')')); };
+    x.timeout = 8000;
+    x.send(body !== null ? JSON.stringify(body) : null);
+  }
+
+  Ref.prototype.set = function(data) {
+    var url = this._url();
+    return new Promise(function(res, rej) { xhr('PUT', url, data, res, rej); });
+  };
+
+  Ref.prototype.update = function(data) {
+    var url = this._url();
+    return new Promise(function(res, rej) { xhr('PATCH', url, data, res, rej); });
+  };
+
+  Ref.prototype.remove = function() {
+    var url = this._url();
+    return new Promise(function(res, rej) { xhr('DELETE', url, null, res, rej); });
+  };
+
+  Ref.prototype.once = function(event, cb, errCb) {
+    var self = this;
+    var url  = self._url('t=' + Date.now());
+    return new Promise(function(resolve, reject) {
+      xhr('GET', url, null, function(text) {
+        try {
+          var snap = new Snapshot(self.key, JSON.parse(text));
+          if (cb) cb(snap);
+          resolve(snap);
+        } catch(e) { if (errCb) errCb(e); else reject(e); }
+      }, function(e) {
+        if (errCb) errCb(e); else reject(e);
+      });
+    });
+  };
+
+  Ref.prototype.on = function(event, cb, errCb) {
+    if (event !== 'value') return cb;
+    var self = this, key = self.path;
+    if (!self._db._listeners[key]) self._db._listeners[key] = [];
+    self.once('value', cb, errCb);
+    var iid = setInterval(function() { self.once('value', cb, errCb); }, 1500);
+    self._db._listeners[key].push({ cb: cb, iid: iid });
+    return cb;
+  };
+
+  Ref.prototype.off = function(event, cb) {
+    var key = this.path, list = this._db._listeners[key];
+    if (!list) return;
+    this._db._listeners[key] = list.filter(function(e) {
+      if (cb !== undefined && e.cb !== cb) return true;
+      clearInterval(e.iid); return false;
+    });
+  };
+
+  function Snapshot(key, data) { this.key = key; this._data = data; }
+  Snapshot.prototype.val = function() { return this._data; };
+
+  return {
+    apps: _apps,
+    initializeApp: function(cfg) {
+      if (_apps.length > 0) return _apps[0];
+      var app = new App(cfg); _apps.push(app); _defaultApp = app; return app;
+    },
+    app: function() { return _defaultApp; },
+    database: function() {
+      if (!_defaultApp) throw new Error('No Firebase app initialized');
+      return _defaultApp.database();
+    }
+  };
+})();
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// GALAXY RESTAURANT — CUSTOMER MENU
+// Firebase Realtime Database: instant order write + live menu sync
+// JSONBin: automatic fallback if Firebase unavailable
+// ══════════════════════════════════════════════════════════════════
+
+// ── FIREBASE CONFIG (same as owner app) ──
+var firebaseConfig = {
+  apiKey: "AIzaSyDH3HXK3CNNkkaNF2XswkifxygPcCOPgCQ",
+  authDomain: "galaxy-pos-3bbc7.firebaseapp.com",
+  databaseURL: "https://galaxy-pos-3bbc7-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "galaxy-pos-3bbc7",
+  storageBucket: "galaxy-pos-3bbc7.firebasestorage.app",
+  messagingSenderId: "755929247643",
+  appId: "1:755929247643:web:07c6eeaa0a4c97904abb3e",
+  measurementId: "G-B6GB6FN928"
+};
+
+// ── JSONBin fallback ──
+var JSONBIN_URL    = 'https://api.jsonbin.io/v3/b/69c6571cb7ec241ddcab854e';
+var JSONBIN_SECRET = '$2a$10$mG321MWWbqOYgKs79d3YvePDUEUiOZSpLBgs2wtGnVpIbRmr0RSwu';
+var SHEET_URL      = 'https://script.google.com/macros/s/AKfycbyOKhk0OrPCmwLB5V_EpT3A13LeHfLnclkyH5Gy-yQ1EfTWsW00fWLQy9cq2OPQ_lrOdQ/exec';
+
+var _db = null;
+var _fbReady = false;
+
+// ── MENU DATA ──
+var MENU = [
+  {id:1,name:'Veg Momos',desc:'Steamed veg dumplings with spicy chutney',cat:'momos',img:'https://i.postimg.cc/MK5hzkBf/fec3b34d5edb094554ed761c0d6f9d17.jpg',sizes:{half:20,full:40}},
+  {id:2,name:'Paneer Momos',desc:'Soft dumplings stuffed with spiced paneer',cat:'momos',img:'https://i.postimg.cc/MK5hzkBf/fec3b34d5edb094554ed761c0d6f9d17.jpg',sizes:{half:30,full:60}},
+  {id:3,name:'Veg Kurkur Momos',desc:'Extra crispy fried veg momos with tangy dip',cat:'momos',img:'https://i.postimg.cc/bJ1BM48v/de407313b6300004594b4222eb5edab0.jpg',sizes:{half:60,full:100}},
+  {id:4,name:'Paneer Kurkur Momos',desc:'Crunchy fried momos packed with rich paneer',cat:'momos',img:'https://i.postimg.cc/bJ1BM48v/de407313b6300004594b4222eb5edab0.jpg',sizes:{half:70,full:120}},
+  {id:5,name:'Chilly Gravy Momos',desc:'Momos tossed in spicy Indo-Chinese chilly gravy',cat:'momos',img:'https://i.postimg.cc/43VPNt0F/84227fceb69298a49ab6cd24811704af.jpg',sizes:{half:70,full:120}},
+  {id:6,name:'Veg Noodles',desc:'Stir-fried hakka noodles with fresh vegetables',cat:'noodles',img:'https://i.postimg.cc/tg3dHbZR/3df666e4702aa9c7c6ab9c299a672131.jpg',sizes:{half:20,full:30}},
+  {id:7,name:'Spl. Noodles',desc:"Special loaded noodles with chef's secret sauce",cat:'noodles',img:'https://i.postimg.cc/pL8zDvBG/3b3357e75c65a42570dc704fa77f45cc.jpg',sizes:{half:30,full:50}},
+  {id:8,name:'French Fry',desc:'Golden crispy potato fries lightly salted',cat:'noodles',img:'https://images.unsplash.com/photo-1573080496219-bb080dd4f877?w=400&q=80',sizes:{half:20,full:40}},
+  {id:9,name:'Plane Grill Pizza',desc:'Classic grilled pizza with tomato sauce and cheese',cat:'pizza',img:'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=400&q=80',sizes:{small:60,large:90}},
+  {id:10,name:'Double Cheese Pizza',desc:'Extra cheesy pizza loaded with mozzarella',cat:'pizza',img:'https://images.unsplash.com/photo-1571407970349-bc81e7e96d47?w=400&q=80',sizes:{small:70,large:100}},
+  {id:11,name:'Paneer Grilled Pizza',desc:'Grilled pizza topped with spiced paneer chunks',cat:'pizza',img:'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=400&q=80',sizes:{small:80,large:130}},
+  {id:12,name:'Special Panjabi Tadka',desc:'Punjabi masala twist pizza with rich spiced topping',cat:'pizza',img:'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&q=80',sizes:{small:90,large:150}},
+  {id:13,name:'Plane Grill Burger',desc:'Simple grilled patty burger with fresh veggies',cat:'burger',img:'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=400&q=80',price:40},
+  {id:14,name:'Cheeses Grill Burger',desc:'Grilled burger loaded with melted cheese slices',cat:'burger',img:'https://i.postimg.cc/TPfLgDwF/61077a431cc9fe700d684e97347bb286.jpg',price:50},
+  {id:15,name:'Paneer Grill Burger',desc:'Juicy grilled paneer burger with mint mayo',cat:'burger',img:'https://images.unsplash.com/photo-1607013251379-e6eecfffe234?w=400&q=80',price:60},
+  {id:16,name:'Double Tikki Burger',desc:'Double patty burger packed with extra flavour',cat:'burger',img:'https://images.unsplash.com/photo-1594212699903-ec8a3eca50f5?w=400&q=80',price:70},
+  {id:17,name:'Plane Grill Sandwich',desc:'Classic toasted sandwich with fresh fillings',cat:'sandwich',img:'https://images.unsplash.com/photo-1528736235302-52922df5c122?w=400&q=80',price:40},
+  {id:18,name:'Cheeses Grill Sandwich',desc:'Grilled sandwich oozing with melted cheese',cat:'sandwich',img:'https://images.unsplash.com/photo-1528736235302-52922df5c122?w=400&q=80',price:50},
+  {id:19,name:'Paneer Grill Sandwich',desc:'Toasted sandwich stuffed with spiced paneer',cat:'sandwich',img:'https://i.postimg.cc/N0sF5vCs/c9eb694c3d4c0fd52bddf1537fe3a09f.jpg',price:60},
+  {id:20,name:'Double Tikki Sandwich',desc:'Double-filled sandwich for the hungry ones',cat:'sandwich',img:'https://images.unsplash.com/photo-1521390188846-e2a3a97453a0?w=400&q=80',price:70},
+  {id:21,name:'Maggi',desc:'Classic Maggi noodles cooked to perfection',cat:'snacks',img:'https://images.unsplash.com/photo-1612929633738-8fe44f7ec841?w=400&q=80',price:50},
+  {id:22,name:'Manchurian',desc:'Crispy veggie balls in tangy Manchurian gravy',cat:'snacks',img:'https://i.postimg.cc/pdWYQTLv/5867000ad345c7adc83e3bb01c7efc97.jpg',sizes:{half:70,full:120}},
+  {id:23,name:'Chilli Potato',desc:'Spicy Indo-Chinese fried potato tossed in sauce',cat:'snacks',img:'https://i.postimg.cc/65xZL3Hw/ad826dd0b1ff18835abca10253734dee.jpg',sizes:{half:50,full:90}},
+  {id:24,name:'Honey Chilli Potato',desc:'Sweet and spicy honey-glazed crispy potato',cat:'snacks',img:'https://i.postimg.cc/mDMDt3Ws/7e7673aff1ce44e4ca56a55a192a2a70.jpg',sizes:{half:60,full:100}},
+  {id:25,name:'Chilli Mashroom',desc:'Button mushrooms tossed in fiery chilli sauce',cat:'snacks',img:'https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=400&q=80',sizes:{half:90,full:160}},
+  {id:26,name:'Chilli Chap',desc:'Crispy chap tossed in spiced chilly masala',cat:'snacks',img:'https://i.postimg.cc/nLmZkHRY/59bbda0c9886b3183968a6b369aef53f.jpg',sizes:{half:90,full:160}},
+  {id:27,name:'Chilli Paneer',desc:'Cottage cheese cubes in bold chilly sauce',cat:'snacks',img:'https://i.postimg.cc/C143Pdjv/0df1ae2879042deee637cee2c7a08ef0.jpg',sizes:{half:90,full:160}},
+  {id:28,name:'Spring Roll',desc:'Golden crispy rolls with veggie stuffing',cat:'snacks',img:'https://i.postimg.cc/QMJYswVY/ac8a8dabdfe2b99f271d0ee9ef0de186.jpg',price:20},
+  {id:29,name:'Veg Kathi Roll',desc:'Spiced veggies in soft paratha with chutney & onions',cat:'snacks',img:'https://i.postimg.cc/0jT070b3/481e9c86ec2f1d7fa4b10ac2c9ded2e3.jpg',price:50},
+  {id:30,name:'Chap Kathi Roll',desc:'Flavourful chap wrapped in soft paratha',cat:'snacks',img:'https://i.postimg.cc/nLhSFT7k/459ba9c424fc5c54d3d8b95fd828ade2.jpg',price:60},
+  {id:31,name:'Paneer Kathi Roll',desc:'Spiced paneer wrapped in grilled paratha with chutney',cat:'snacks',img:'https://i.postimg.cc/x8v3ybHZ/443e3eb28ee9315ab961787df489e30d.jpg',price:60},
+  {id:32,name:'Mashroom Kathi Roll',desc:'Juicy mushroom filling in crispy paratha roll',cat:'snacks',img:'https://i.postimg.cc/nLhSFT7k/459ba9c424fc5c54d3d8b95fd828ade2.jpg',price:60}
+];
+
+var cart = {};
+var currentCat = 'all';
+var menuOverrides = {};
+var customItems = [];
+var deletedIds = [];
+
+// ══════════════════════════════════════════════════════════════════
+// FIREBASE INIT + LIVE MENU SYNC
+// Listens to menuState node — owner price/stock changes arrive
+// on every customer device instantly with no refresh needed.
+// ══════════════════════════════════════════════════════════════════
+(function initFirebase() {
+  // Step 1: init SDK object (sync)
+  try {
+    if (typeof firebase === 'undefined') throw new Error('SDK missing');
+    var app = firebase.apps.length ? firebase.app() : firebase.initializeApp(firebaseConfig);
+    _db = app.database();
+  } catch(e) {
+    console.warn('[Galaxy Customer] Firebase SDK error:', e.message);
+    return;
+  }
+  // Step 2: probe connectivity before subscribing
+  var testUrl = firebaseConfig.databaseURL + '/.json?t=' + Date.now();
+  var x = new XMLHttpRequest();
+  x.open('GET', testUrl);
+  x.timeout = 5000;
+  x.onload = function() {
+    if (x.status === 200 || x.status === 204) {
+      _fbReady = true;
+      console.log('[Galaxy Customer] Firebase connected ✅');
+      // Start live menu sync now that we know REST works
+      _db.ref('menuState').on('value', function(snap) {
+        var data = snap.val();
+        if (!data) return;
+        var changed = false;
+        if (data.overrides !== undefined) { menuOverrides = data.overrides || {}; changed = true; try{localStorage.setItem('gmf_overrides',JSON.stringify(menuOverrides));}catch(e){} }
+        if (data.custom    !== undefined) { customItems   = data.custom    || []; changed = true; try{localStorage.setItem('gmf_custom',JSON.stringify(customItems));}catch(e){} }
+        if (data.deleted   !== undefined) { deletedIds    = data.deleted   || []; changed = true; try{localStorage.setItem('gmf_deleted',JSON.stringify(deletedIds));}catch(e){} }
+        if (changed) renderMenu();
+      }, function(err) {
+        console.warn('[Galaxy Customer] menuState sync error:', err.message);
+      });
+    } else {
+      console.warn('[Galaxy Customer] Firebase REST returned', x.status, '— menu sync via localStorage only');
+    }
+  };
+  x.onerror = function() {
+    console.warn('[Galaxy Customer] Firebase unreachable — host files on a web server for live menu sync.');
+  };
+  x.ontimeout = function() {
+    console.warn('[Galaxy Customer] Firebase timeout — using local cache.');
+  };
+  x.send();
+})();
+
+// ── LOAD MENU STATE (localStorage seed while Firebase connects) ──
+function loadMenuState() {
+  try { var s=localStorage.getItem('gmf_overrides'); if(s) menuOverrides=JSON.parse(s); } catch(e) {}
+  try { var s=localStorage.getItem('gmf_custom');    if(s) customItems=JSON.parse(s);   } catch(e) {}
+  try { var s=localStorage.getItem('gmf_deleted');   if(s) deletedIds=JSON.parse(s);    } catch(e) {}
+}
+
+function getAllMenuItems() {
+  return MENU.filter(function(m){ return !deletedIds.includes(m.id); }).concat(customItems);
+}
+function cartKey(id, size) { return size ? id + '_' + size : String(id); }
+
+// ── RENDER MENU ──
+function renderMenu() {
+  var grid = document.getElementById('menu-grid');
+  if (!grid) return;
+  var allItems = getAllMenuItems();
+  var items = currentCat === 'all' ? allItems : allItems.filter(function(m){ return m.cat === currentCat; });
+  grid.innerHTML = '';
+
+  if (currentCat === 'all') {
+    var cats = ['momos','noodles','pizza','burger','sandwich','snacks','drinks'];
+    var catLabels = {momos:'🥟 Momos',noodles:'🍜 Noodles',pizza:'🍕 Pizza',burger:'🍔 Burger',sandwich:'🥪 Sandwich',snacks:'🍟 Snacks',drinks:'🧃 Drinks'};
+    cats.forEach(function(cat) {
+      var catItems = allItems.filter(function(m){ return m.cat === cat; });
+      if (!catItems.length) return;
+      var title = document.createElement('div');
+      title.className = 'cat-section-title';
+      title.style.gridColumn = '1 / -1';
+      title.textContent = catLabels[cat] || cat;
+      grid.appendChild(title);
+      catItems.forEach(function(item){ grid.appendChild(buildCard(item)); });
+    });
+  } else {
+    items.forEach(function(item){ grid.appendChild(buildCard(item)); });
+  }
+}
+
+function buildCard(item) {
+  var ov = menuOverrides[item.id] || {};
+  var inStock = ov.inStock !== false;
+  var displayItem = Object.assign({}, item);
+  if (displayItem.sizes) {
+    displayItem.sizes = Object.assign({}, item.sizes);
+    Object.keys(displayItem.sizes).forEach(function(k){ if (ov['price_'+k] !== undefined) displayItem.sizes[k] = ov['price_'+k]; });
+  } else if (ov.price !== undefined) {
+    displayItem.price = ov.price;
+  }
+  var card = document.createElement('div');
+  card.className = 'food-card' + (inStock ? '' : ' out-of-stock-card');
+  var imgHtml = '<div class="food-img-wrap">' +
+    (!inStock ? '<div class="oos-badge"><span>OUT OF STOCK</span></div>' : '') +
+    '<img src="' + displayItem.img + '" alt="' + displayItem.name + '" loading="lazy" onerror="this.style.opacity=0.3">' +
+    '</div>';
+  var controlsHtml = '';
+  if (displayItem.sizes) {
+    var keys = Object.keys(displayItem.sizes);
+    var labels = {half:'Half',full:'Full',small:'Sm',large:'Lg'};
+    var sizeRows = keys.map(function(sz) {
+      var key = cartKey(displayItem.id, sz);
+      var qty = cart[key] || 0;
+      var lbl = labels[sz] || sz;
+      var price = displayItem.sizes[sz];
+      if (!inStock) return '<div class="size-row"><span class="size-lbl">'+lbl+' <span class="size-price">&#8377;'+price+'</span></span><span style="font-size:10px;color:var(--danger);font-weight:700">—</span></div>';
+      if (qty === 0) return '<div class="size-row"><span class="size-lbl">'+lbl+' <span class="size-price">&#8377;'+price+'</span></span><button class="add-btn small-add" onclick="addItem('+displayItem.id+',\''+sz+'\')">+</button></div>';
+      return '<div class="size-row"><span class="size-lbl">'+lbl+' <span class="size-price">&#8377;'+price+'</span></span><div class="qty-ctrl"><button class="qty-btn" onclick="removeItem('+displayItem.id+',\''+sz+'\')">&#8722;</button><span class="qty-num">'+qty+'</span><button class="qty-btn" onclick="addItem('+displayItem.id+',\''+sz+'\')">+</button></div></div>';
+    }).join('');
+    card.innerHTML = imgHtml + '<div class="food-info"><div class="food-name">'+displayItem.name+'</div><div class="food-desc">'+displayItem.desc+'</div><div class="size-controls">'+sizeRows+'</div></div>';
+  } else {
+    var qty = cart[cartKey(displayItem.id, null)] || 0;
+    var ctrl = !inStock
+      ? '<span style="font-size:11px;color:var(--danger);font-weight:700">Unavailable</span>'
+      : qty === 0
+        ? '<button class="add-btn" onclick="addItem('+displayItem.id+',null)">+</button>'
+        : '<div class="qty-ctrl"><button class="qty-btn" onclick="removeItem('+displayItem.id+',null)">&#8722;</button><span class="qty-num">'+qty+'</span><button class="qty-btn" onclick="addItem('+displayItem.id+',null)">+</button></div>';
+    card.innerHTML = imgHtml + '<div class="food-info"><div class="food-name">'+displayItem.name+'</div><div class="food-desc">'+displayItem.desc+'</div><div class="food-footer"><span class="food-price">&#8377;'+displayItem.price+'</span>'+ctrl+'</div></div>';
+  }
+  return card;
+}
+
+function addItem(id, size) {
+  var ov = menuOverrides[id] || {};
+  if (ov.inStock === false) return;
+  var key = cartKey(id, size);
+  cart[key] = (cart[key] || 0) + 1;
+  updateCartUI(); renderMenu(); pulseFAB();
+}
+function removeItem(id, size) {
+  var key = cartKey(id, size);
+  if (cart[key] > 1) cart[key]--; else delete cart[key];
+  updateCartUI(); renderMenu();
+}
+function getCartCount() { return Object.values(cart).reduce(function(s,v){ return s+v; },0); }
+function getCartTotal() {
+  return Object.entries(cart).reduce(function(s,e) {
+    var parts = e[0].split('_'); var id = parseInt(parts[0]); var sz = parts[1] || null;
+    var item = getAllMenuItems().find(function(m){ return m.id === id; });
+    if (!item) return s;
+    var ov = menuOverrides[id] || {};
+    var price = sz ? (ov['price_'+sz] !== undefined ? ov['price_'+sz] : item.sizes[sz]) : (ov.price !== undefined ? ov.price : item.price);
+    return s + price * e[1];
+  }, 0);
+}
+function updateCartUI() {
+  var count = getCartCount();
+  document.getElementById('cart-count').textContent = count;
+  document.getElementById('cart-total-fab').textContent = '\u20b9' + getCartTotal();
+  var fab = document.getElementById('cart-fab');
+  if (count > 0) fab.classList.add('show'); else fab.classList.remove('show');
+}
+function pulseFAB() {
+  var fab = document.getElementById('cart-fab');
+  fab.classList.remove('pulse'); void fab.offsetWidth; fab.classList.add('pulse');
+}
+function openPanel() {
+  document.getElementById('panel-overlay').classList.add('open');
+  document.getElementById('order-panel').classList.add('open');
+  renderPanel();
+  var heroTable = document.getElementById('table-num').value;
+  if (heroTable && !document.getElementById('cust-table').value) {
+    document.getElementById('cust-table').value = heroTable;
+  }
+}
+function closePanel() {
+  document.getElementById('panel-overlay').classList.remove('open');
+  document.getElementById('order-panel').classList.remove('open');
+}
+function renderPanel() {
+  var container = document.getElementById('panel-items');
+  var entries = Object.entries(cart);
+  var sizeLabels = {half:'Half',full:'Full',small:'Small',large:'Large'};
+  if (!entries.length) {
+    container.innerHTML = '<p style="color:var(--text3);font-size:14px;text-align:center;padding:24px 0">Your order is empty.</p>';
+  } else {
+    container.innerHTML = entries.map(function(e) {
+      var parts = e[0].split('_'); var id = parseInt(parts[0]); var sz = parts[1] || null;
+      var item = getAllMenuItems().find(function(m){ return m.id === id; });
+      if (!item) return '';
+      var ov = menuOverrides[id] || {};
+      var price = sz ? (ov['price_'+sz] !== undefined ? ov['price_'+sz] : item.sizes[sz]) : (ov.price !== undefined ? ov.price : item.price);
+      var nameLabel = item.name + (sz ? ' (' + (sizeLabels[sz]||sz) + ')' : '');
+      return '<div class="panel-item"><div class="panel-item-left"><div class="panel-item-name">'+nameLabel+'</div><div class="panel-item-meta">'+e[1]+' x \u20b9'+price+'</div></div><span class="panel-item-price">\u20b9'+(price*e[1])+'</span></div>';
+    }).join('');
+  }
+  document.getElementById('panel-total').textContent = '\u20b9' + getCartTotal();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// PLACE ORDER — Firebase first, JSONBin fallback
+// Single _db.ref('orders/orderNum').set() write = instant delivery
+// to owner dashboard via Firebase real-time listener (<100ms).
+// ══════════════════════════════════════════════════════════════════
+async function placeOrder() {
+  if (!getCartCount()) return;
+  var custName  = (document.getElementById('cust-name').value  || '').trim();
+  var custPhone = (document.getElementById('cust-phone').value || '').trim();
+  var custTable = (document.getElementById('cust-table').value || '').trim();
+  if (!custName)  { toast('Please enter your name'); return; }
+  if (!custPhone || custPhone.length < 10) { toast('Please enter a valid 10-digit number'); return; }
+  if (!custTable) { toast('Please enter your table number'); return; }
+
+  var btn = document.getElementById('place-btn');
+  btn.textContent = 'Placing order\u2026'; btn.disabled = true;
+
+  var sizeLabels = {half:'Half',full:'Full',small:'Small',large:'Large'};
+  var items = Object.entries(cart).map(function(e) {
+    var parts = e[0].split('_'); var id = parseInt(parts[0]); var sz = parts[1] || null;
+    var item = getAllMenuItems().find(function(m){ return m.id === id; });
+    var ov = menuOverrides[id] || {};
+    var price = sz ? (ov['price_'+sz] !== undefined ? ov['price_'+sz] : item.sizes[sz]) : (ov.price !== undefined ? ov.price : item.price);
+    var name = item.name + (sz ? ' (' + (sizeLabels[sz]||sz) + ')' : '');
+    return {name:name, qty:e[1], price:price};
+  });
+
+  var orderNum = 'GMF' + Date.now().toString().slice(-8);  // no hyphens - safe Firebase key
+  var newOrder = {
+    orderNum:      orderNum,
+    tableNumber:   custTable,
+    customerName:  custName,
+    customerPhone: custPhone,
+    items:         items,
+    total:         getCartTotal(),
+    status:        'pending',
+    timestamp:     new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}),
+    createdAt:     new Date().toISOString()
+  };
+
+  var success = false;
+
+  if (_fbReady) {
+    // ── Firebase path: single write to orders/<orderNum> — arrives at
+    //    owner dashboard in <100ms via _db.ref('orders').on('value') ──
+    try {
+      await _db.ref('orders/' + orderNum).set(newOrder);
+      success = true;
+      // Also signal BroadcastChannel for same-device fallback
+      try { var bc = new BroadcastChannel('gmf_orders'); bc.postMessage('new_order'); setTimeout(function(){ bc.close(); }, 200); } catch(e) {}
+    } catch(e) {
+      console.warn('[Galaxy] Firebase write failed, falling back to JSONBin', e);
+    }
+  }
+
+  if (!success) {
+    // ── JSONBin fallback ──
+    try {
+      var ctrl = new AbortController();
+      var tid  = setTimeout(function(){ ctrl.abort(); }, 8000);
+      var res  = await fetch(JSONBIN_URL + '/latest?t=' + Date.now(), {
+        headers:{'X-Master-Key':JSONBIN_SECRET,'X-Bin-Versioning':'false','Cache-Control':'no-cache'},
+        signal: ctrl.signal
+      });
+      clearTimeout(tid);
+      var data = await res.json();
+      var existing = Array.isArray(data.record) ? data.record.filter(function(o){ return !o.init; }) : [];
+      existing.push(newOrder);
+      await fetch(JSONBIN_URL, {
+        method:'PUT',
+        headers:{'Content-Type':'application/json','X-Master-Key':JSONBIN_SECRET,'X-Bin-Versioning':'false'},
+        body: JSON.stringify(existing)
+      });
+      success = true;
+      try { var bc = new BroadcastChannel('gmf_orders'); bc.postMessage('new_order'); setTimeout(function(){ bc.close(); }, 200); } catch(e) {}
+    } catch(e) {
+      toast('Network error, please try again');
+      btn.textContent = '\ud83d\udece\ufe0f Place Order'; btn.disabled = false;
+      return;
+    }
+  }
+
+  // Optional Google Sheets log (fire-and-forget, never blocks)
+  try { fetch(SHEET_URL, {method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'}, body:JSON.stringify(Object.assign({action:'addOrder'}, newOrder))}); } catch(e) {}
+
+  // ── Success ──
+  cart = {};
+  ['cust-name','cust-phone','cust-table'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+  closePanel(); updateCartUI(); renderMenu();
+  btn.textContent = '\ud83d\udece\ufe0f Place Order'; btn.disabled = false;
+  document.getElementById('confirm-msg').textContent = 'Thank you, ' + custName + '! Your order for Table ' + custTable + ' is now with the kitchen. \ud83c\udf7d\ufe0f';
+  document.getElementById('confirm-overlay').classList.add('show');
+  launchConfetti();
+}
+
+function closeConfirm() { document.getElementById('confirm-overlay').classList.remove('show'); }
+
+function toast(msg) {
+  var t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(function(){ t.classList.remove('show'); }, 2500);
+}
+
+function launchConfetti() {
+  var canvas = document.getElementById('confetti-canvas');
+  var ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+  var colors = ['#e8a045','#f5c878','#b87820','#5aaa80','#fff5e0','#e05555'];
+  var pieces = [];
+  for (var n=0;n<90;n++) pieces.push({x:Math.random()*canvas.width,y:-10,r:Math.random()*6+3,d:Math.random()*10+5,color:colors[Math.floor(Math.random()*colors.length)],tilt:Math.random()*10-5,tiltAngle:0,tiltInc:Math.random()*0.07+0.05});
+  var frame = 0;
+  (function draw() {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    pieces.forEach(function(p,i){ p.tiltAngle+=p.tiltInc;p.y+=(Math.cos(frame/30+i)+p.d)*0.5;p.tilt=Math.sin(p.tiltAngle)*12;ctx.beginPath();ctx.lineWidth=p.r;ctx.strokeStyle=p.color;ctx.moveTo(p.x+p.tilt+p.r/3,p.y);ctx.lineTo(p.x+p.tilt,p.y+p.tilt+p.r);ctx.stroke(); });
+    frame++;
+    if (frame < 130) requestAnimationFrame(draw); else ctx.clearRect(0,0,canvas.width,canvas.height);
+  })();
+}
+
+// ── CATEGORY BAR ──
+document.getElementById('cat-bar').addEventListener('click', function(e) {
+  var btn = e.target.closest('.cat-btn');
+  if (!btn) return;
+  document.querySelectorAll('.cat-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  currentCat = btn.dataset.cat;
+  renderMenu();
+});
+
+// ── TABLE SYNC ──
+document.getElementById('table-num').addEventListener('change', function() {
+  document.getElementById('cust-table').value = this.value;
+});
+
+// ── READ TABLE FROM URL PARAM ──
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var t = params.get('table');
+  if (t) {
+    document.getElementById('table-num').value = t;
+    document.getElementById('cust-table').value = t;
+  }
+})();
+
+// ── SAME-DEVICE STORAGE EVENT (localStorage sync fallback) ──
+window.addEventListener('storage', function(e) {
+  if (e.key === 'gmf_overrides' || e.key === 'gmf_custom' || e.key === 'gmf_deleted') {
+    loadMenuState(); renderMenu();
+  }
+});
+
+// ── INIT ──
+loadMenuState();
+renderMenu();
+</script>
+</body>
+</html>
