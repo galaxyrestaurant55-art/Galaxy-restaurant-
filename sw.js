@@ -7,7 +7,7 @@
 ═══════════════════════════════════════════════════════════════════ */
 
 var DB_URL     = 'https://galaxy-pos-3bbc7-default-rtdb.asia-southeast1.firebasedatabase.app';
-var CACHE_NAME = 'galaxy-pos-v4';
+var CACHE_NAME = 'galaxy-pos-v6';
 
 var _knownNums    = null;   // Set of order nums already seen
 var _printedNums  = {};     // mirrors _autoPrintPrinted from main page
@@ -80,11 +80,29 @@ self.addEventListener('message', function(e) {
           requireInteraction: true,
           silent:             false,
           vibrate:            [500,100,500,100,700,200,500,100,500,100,700],
-          icon:               'https://api.dicebear.com/7.x/icons/svg?seed=galaxy&backgroundColor=1a0a0a',
-          badge:              'https://api.dicebear.com/7.x/icons/svg?seed=galaxy&backgroundColor=1a0a0a',
+          icon:               'icon-192.png',
+          badge:              'icon-192.png',
           data:               { url: self.registration.scope + 'owner.html' }
         });
       }
+      break;
+    case 'CLEAR_PRINT_QUEUE':
+      // Page successfully printed — clear the saved queue
+      _clearPrintQueue();
+      break;
+    case 'GET_PRINT_QUEUE':
+      // Page asking for queued print jobs (called on focus/load)
+      _loadPrintQueue().then(function(orders) {
+        if (orders && orders.length > 0) {
+          // Send queue to page then clear it
+          self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(cs) {
+            cs.forEach(function(c) {
+              c.postMessage({ type: 'PRINT_QUEUE', orders: orders });
+            });
+          });
+          _clearPrintQueue();
+        }
+      });
       break;
   }
 });
@@ -210,6 +228,36 @@ function _pollOnce() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   PENDING PRINT QUEUE — stored in Cache API (no IndexedDB needed)
+   Orders waiting to be printed are saved here. When app opens or
+   comes to foreground, it reads this queue and prints immediately.
+══════════════════════════════════════════════════════════════════ */
+var PRINT_QUEUE_KEY = 'gmf-print-queue';
+
+function _savePrintQueue(orders) {
+  // Store as a fake Response in the cache — zero-cost KV store
+  var data = JSON.stringify(orders);
+  caches.open(CACHE_NAME).then(function(c) {
+    c.put(new Request(PRINT_QUEUE_KEY), new Response(data));
+  }).catch(function(){});
+}
+
+function _loadPrintQueue() {
+  return caches.open(CACHE_NAME).then(function(c) {
+    return c.match(new Request(PRINT_QUEUE_KEY));
+  }).then(function(res) {
+    if (!res) return [];
+    return res.json().catch(function(){ return []; });
+  }).catch(function(){ return []; });
+}
+
+function _clearPrintQueue() {
+  caches.open(CACHE_NAME).then(function(c) {
+    c.delete(new Request(PRINT_QUEUE_KEY));
+  }).catch(function(){});
+}
+
+/* ══════════════════════════════════════════════════════════════════
    CORE ORDER PROCESSING — called by both SSE and poll paths
 ══════════════════════════════════════════════════════════════════ */
 function _handleOrdersObject(data) {
@@ -224,7 +272,6 @@ function _handleOrdersObject(data) {
   var nums     = pending.map(function(o) { return o.orderNum; });
 
   if (_knownNums === null) {
-    // First snapshot — record existing orders, don't alert for them
     _knownNums = new Set(nums);
     broadcastToClients({ type: 'SW_READY', nums: nums });
     return;
@@ -234,17 +281,58 @@ function _handleOrdersObject(data) {
   newOrders.forEach(function(o) { _knownNums.add(o.orderNum); });
   if (newOrders.length === 0) return;
 
-  // ── 1. Tell main page immediately (UI repaint + foreground bell) ──
+  // ── 1. Tell main page immediately (UI repaint + foreground bell + foreground print) ──
   broadcastToClients({ type: 'NEW_ORDERS', orders: newOrders, allPending: pending });
 
-  // ── 2. System notification (works on locked screen) ──
+  // ── 2. Auto-print logic ──
+  // Web Bluetooth CANNOT run from SW or background page.
+  // Solution:
+  //   • If page is VISIBLE → page handles print itself via AUTO_PRINT_TRIGGER
+  //   • If page is BACKGROUND/CLOSED → save to print queue in cache, fire notification
+  //     with "Print Now" action. On tap/open, page reads queue and prints.
+  if (_autoPrint) {
+    var toPrint = newOrders.filter(function(o) { return !_printedNums[o.orderNum]; });
+    if (toPrint.length) {
+      toPrint.forEach(function(o) { _printedNums[o.orderNum] = true; });
+
+      // Check if any owner window is visible (foreground)
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clients) {
+        var appVisible = clients.some(function(c) {
+          return c.url.indexOf('owner') !== -1 && c.visibilityState === 'visible';
+        });
+
+        if (appVisible) {
+          // Page is in foreground — send trigger, page will use BT directly
+          broadcastToClients({ type: 'AUTO_PRINT_TRIGGER', orders: toPrint });
+        } else {
+          // Page is background/closed — save queue so app prints on next open/focus
+          _loadPrintQueue().then(function(existing) {
+            // Merge, deduplicate by orderNum
+            var merged = existing.slice();
+            toPrint.forEach(function(o) {
+              if (!merged.some(function(e){ return e.orderNum === o.orderNum; })) {
+                merged.push(o);
+              }
+            });
+            _savePrintQueue(merged);
+            // Also send trigger — page will receive it when it comes to foreground
+            broadcastToClients({ type: 'AUTO_PRINT_TRIGGER', orders: toPrint });
+          });
+        }
+      });
+    }
+  }
+
+  // ── 3. System notification (works on locked screen) ──
+  var appUrl = self.registration.scope + 'owner.html';
   var notifPromises = newOrders.map(function(o) {
     var title = '\uD83D\uDD14 New Order \u2014 Table ' + o.tableNumber;
     var body  = (o.customerName ? o.customerName + ' \u2022 ' : '') +
                 (Array.isArray(o.items)
                   ? o.items.map(function(i){ return i.qty + 'x ' + i.name; }).join(', ')
                   : '') +
-                ' \u2022 \u20B9' + (o.total || 0);
+                ' \u2022 \u20B9' + (o.total || 0) +
+                (_autoPrint ? ' \u2014 Tap "Print Now" to print!' : '');
     return self.registration.showNotification(title, {
       body:               body,
       tag:                'order-' + o.orderNum,
@@ -252,24 +340,15 @@ function _handleOrdersObject(data) {
       requireInteraction: true,
       silent:             false,
       vibrate:            [500,100,500,100,700,200,500,100,500,100,700],
-      icon:               'https://api.dicebear.com/7.x/icons/svg?seed=galaxy&backgroundColor=1a0a0a',
-      badge:              'https://api.dicebear.com/7.x/icons/svg?seed=galaxy&backgroundColor=1a0a0a',
+      icon:               'icon-192.png',
+      badge:              'icon-192.png',
       actions: [
-        { action: 'view',  title: '\uD83D\uDCCB View Orders' },
-        { action: 'print', title: '\uD83D\uDDA8\uFE0F Print'  }
+        { action: 'view',       title: '\uD83D\uDCCB View Orders' },
+        { action: 'print_open', title: '\uD83D\uDDA8\uFE0F Print Now' }
       ],
-      data: { orderNum: o.orderNum, url: self.registration.scope + 'owner.html' }
+      data: { orderNum: o.orderNum, url: appUrl, autoPrint: _autoPrint }
     });
   });
-
-  // ── 3. Auto-print trigger — deduplicated in SW to prevent double-prints ──
-  if (_autoPrint) {
-    var toPrint = newOrders.filter(function(o) { return !_printedNums[o.orderNum]; });
-    if (toPrint.length) {
-      toPrint.forEach(function(o) { _printedNums[o.orderNum] = true; });
-      broadcastToClients({ type: 'AUTO_PRINT_TRIGGER', orders: toPrint });
-    }
-  }
 
   Promise.all(notifPromises).catch(function(){});
 }
@@ -277,19 +356,24 @@ function _handleOrdersObject(data) {
 /* ── Notification click ── */
 self.addEventListener('notificationclick', function(e) {
   e.notification.close();
-  var target = (e.notification.data && e.notification.data.url)
-    ? e.notification.data.url
-    : self.registration.scope + 'owner.html';
+  var action = e.action;
+  var data   = e.notification.data || {};
+  var target = data.url || (self.registration.scope + 'owner.html');
+  // For print action, add ?autoprint=1 so page knows to print on load
+  if (action === 'print_open') target = target + '?autoprint=1';
 
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(cs) {
+      // Try to find existing owner window
       for (var i = 0; i < cs.length; i++) {
         if (cs[i].url.indexOf('owner') !== -1) {
           cs[i].focus();
-          cs[i].postMessage({ type: 'NOTIFICATION_CLICK', action: e.action });
+          // Tell the page what action was clicked
+          cs[i].postMessage({ type: 'NOTIFICATION_CLICK', action: action, autoPrint: data.autoPrint });
           return;
         }
       }
+      // No window open — open one (will read print queue on load)
       return self.clients.openWindow(target);
     })
   );

@@ -750,16 +750,25 @@ var SITE_URL = ''; // ← PASTE YOUR NETLIFY URL HERE
       navigator.serviceWorker.ready.then(function(r) {
         var cached = getCachedOrders();
         var knownNums = cached ? cached.filter(function(o){ return o.status==='pending'; }).map(function(o){ return o.orderNum; }) : [];
-        r.active.postMessage({ type: 'KNOWN_ORDERS', nums: knownNums });
-        r.active.postMessage({ type: 'PRINTED_NUMS',  nums: _autoPrintPrinted });
-        r.active.postMessage({ type: 'AUTO_PRINT',    enabled: _autoPrint });
+        var target = r.active || r.installing || r.waiting;
+        if(!target) return;
+        target.postMessage({ type: 'KNOWN_ORDERS', nums: knownNums });
+        target.postMessage({ type: 'PRINTED_NUMS',  nums: _autoPrintPrinted });
+        target.postMessage({ type: 'AUTO_PRINT',    enabled: _autoPrint });
+        // Check for any print jobs queued while app was closed/background
+        if(_autoPrint){
+          setTimeout(function(){
+            target.postMessage({ type: 'GET_PRINT_QUEUE' });
+          }, 3000); // delay so printer can connect first if needed
+        }
       });
 
       // Listen for SW messages (new order detected in background)
       navigator.serviceWorker.addEventListener('message', function(e) {
         if (!e.data) return;
+
+        // ── New orders detected by SW ──
         if (e.data.type === 'NEW_ORDERS' && e.data.allPending) {
-          // SW found new orders — skip alert if app is visible (foreground listener already handled it)
           var all = e.data.allPending;
           if (document.visibilityState !== 'visible') {
             _detectAndAlert(all);
@@ -768,15 +777,49 @@ var SITE_URL = ''; // ← PASTE YOUR NETLIFY URL HERE
           _allOrders = all;
           cacheOrders(all);
         }
+
+        // ── Auto-print trigger from SW (app was foreground when SW sent it) ──
         if (e.data.type === 'AUTO_PRINT_TRIGGER' && e.data.orders && _autoPrint) {
-          // SW detected new orders in background while auto-print is on
           e.data.orders.forEach(function(o) {
             if (!_autoPrintPrinted[o.orderNum]) {
               _autoPrintPrinted[o.orderNum] = true;
               savePrinted();
-              queuePrint(o);
+              // Small delay so BT stack is ready
+              setTimeout(function(){ queuePrint(o); }, 600);
             }
           });
+        }
+
+        // ── Print queue from SW (orders queued while app was in background) ──
+        if (e.data.type === 'PRINT_QUEUE' && e.data.orders && e.data.orders.length) {
+          var toPrint = e.data.orders.filter(function(o){
+            return !_autoPrintPrinted[o.orderNum];
+          });
+          toPrint.forEach(function(o){
+            _autoPrintPrinted[o.orderNum] = true;
+          });
+          savePrinted();
+          // Print each queued order with a stagger so printer buffer doesn't overflow
+          toPrint.forEach(function(o, i){
+            setTimeout(function(){ queuePrint(o); }, i * 1800);
+          });
+          if (toPrint.length) toast('🖨️ Printing ' + toPrint.length + ' queued order' + (toPrint.length > 1 ? 's' : '')+'…');
+          // Tell SW the queue is consumed
+          if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_PRINT_QUEUE' });
+          }
+        }
+
+        // ── Notification action button tapped ──
+        if (e.data.type === 'NOTIFICATION_CLICK') {
+          if (e.data.action === 'print_open' || e.data.autoPrint) {
+            // Request any queued print jobs immediately
+            if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+              navigator.serviceWorker.controller.postMessage({ type: 'GET_PRINT_QUEUE' });
+            }
+          }
+          // Switch to orders tab so user sees them
+          switchTab('orders');
         }
       });
     })
@@ -1050,6 +1093,18 @@ function startDash(){
   if(apt) apt.checked=_autoPrint;
   updateStatusBar();
 
+  // If opened via "Print Now" notification tap, request queued print jobs
+  if(window.location.search.indexOf('autoprint=1')!==-1){
+    // Small delay so SW and BT stack are ready
+    setTimeout(function(){
+      if(navigator.serviceWorker&&navigator.serviceWorker.controller){
+        navigator.serviceWorker.controller.postMessage({type:'GET_PRINT_QUEUE'});
+      }
+    }, 2000);
+    // Clean URL without reload
+    try{ window.history.replaceState({},'',window.location.pathname); }catch(e){}
+  }
+
   _knownOrderNums = null;
   _rpIds=''; _rdIds='';
   _doneLocally={};
@@ -1119,7 +1174,15 @@ function _onVisChange(){
     // Repaint from memory IMMEDIATELY when returning to app
     _rpIds=''; _rdIds='';
     if(_allOrders.length) _paintOrders(_allOrders);
-    // Only restart polling if Firebase is NOT active (Firebase listener is always-on)
+    // Request any print jobs that were queued while app was in background
+    if(_autoPrint){
+      try{
+        if(navigator.serviceWorker&&navigator.serviceWorker.controller){
+          navigator.serviceWorker.controller.postMessage({type:'GET_PRINT_QUEUE'});
+        }
+      }catch(e){}
+    }
+    // Only restart polling if Firebase is NOT active
     if(!_fbReady){
       clearTimeout(_nextPollTimer); _pollStop=false; _polling=false;
       runPoll();
@@ -1838,8 +1901,20 @@ async function printAllPending(){
   fallbackPrint(pending);
 }
 function printOrder(o){
-  if(_printerConnected&&_btChar){sendBytesToPrinter(buildEscPosReceipt([o])).then(function(){toast('✅ Printed');}).catch(function(){fallbackPrintSingle(o);});}
-  else fallbackPrintSingle(o);
+  if(_printerConnected&&_btChar){
+    sendBytesToPrinter(buildEscPosReceipt([o]))
+      .then(function(){toast('✅ Printed: Order '+o.orderNum);})
+      .catch(function(e){
+        console.warn('[Print] BT write failed:',e);
+        toast('⚠️ BT failed — using browser print');
+        fallbackPrintSingle(o);
+      });
+  } else {
+    // No BT connected — use browser print dialog
+    // This handles the background auto-print case where BT needs reconnect
+    toast('🖨️ Connect printer first for auto-print. Using browser print…');
+    setTimeout(function(){ fallbackPrintSingle(o); }, 500);
+  }
 }
 function fallbackPrint(pending){
   var rows=pending.map(function(o){
@@ -1860,11 +1935,20 @@ function toggleAutoPrint(on){
   _autoPrint=on;
   saveAutoPrint();
   updateStatusBar();
-  // Sync to SW so it can trigger auto-print when app is in background
-  if(navigator.serviceWorker&&navigator.serviceWorker.controller){
-    navigator.serviceWorker.controller.postMessage({type:'AUTO_PRINT',enabled:on});
+  // Sync to SW — use both .controller and .ready to ensure delivery
+  function _syncSW(reg){
+    try{
+      var target=reg.active||reg.installing||reg.waiting;
+      if(target) target.postMessage({type:'AUTO_PRINT',enabled:on});
+    }catch(e){}
   }
-  toast(on?'⚡ Auto-Print ON':'Auto-Print OFF');
+  if(navigator.serviceWorker){
+    if(navigator.serviceWorker.controller){
+      navigator.serviceWorker.controller.postMessage({type:'AUTO_PRINT',enabled:on});
+    }
+    navigator.serviceWorker.ready.then(_syncSW).catch(function(){});
+  }
+  toast(on?'⚡ Auto-Print ON — opens app & prints on new orders':'Auto-Print OFF');
 }
 function toggleLoopPrint(on){
   _loopPrint=on;
