@@ -9,7 +9,7 @@
 ═══════════════════════════════════════════════════════════════════ */
 
 var DB_URL     = 'https://galaxy-pos-3bbc7-default-rtdb.asia-southeast1.firebasedatabase.app';
-var CACHE_NAME = 'galaxy-pos-v8';
+var CACHE_NAME = 'galaxy-pos-v9';
 
 var _knownNums   = null;   // null = not initialized; Set after first data
 var _printedNums = {};
@@ -20,8 +20,8 @@ var _sseFailed   = false;
 var _safetyTimer = null;
 var _fbActiveOnPage = false; // true when page owns the Firebase SSE
 
-var POLL_MS_SAFETY = 1500;  // faster safety poll
-var POLL_MS_FAST   = 800;
+var POLL_MS_SAFETY = 3000;  // safety net when page owns Firebase (backup only)
+var POLL_MS_FAST   = 800;   // fast poll when SSE unavailable
 
 var APP_SHELL = [
   './owner.html',
@@ -291,10 +291,11 @@ function _clearPrintQueue() {
    silent=true  → first load: just initialize knownNums, no alerts
    silent=false → subsequent updates: alert on genuinely new orders
 
-   KEY FIX: When _fbActiveOnPage is true, the page owns the Firebase
-   SSE and handles alert/print itself. SW only sends notifications
-   (system-level) so the phone rings even in background. It does NOT
-   broadcast NEW_ORDERS or SW_ORDERS_UPDATE to avoid double-alerts.
+   KEY DESIGN: The page handles in-app bell + toast via Firebase SSE.
+   The SW ALWAYS fires system notifications for new orders so the phone
+   rings on the lock screen and in background — regardless of who owns
+   the Firebase stream. _fbActiveOnPage only controls whether SW
+   broadcasts order data to the page (to avoid double-painting).
 ══════════════════════════════════════════════════════════════════ */
 function _handleOrdersObject(data, silent) {
   if (!data || typeof data !== 'object') return;
@@ -347,10 +348,8 @@ function _handleOrdersObject(data, silent) {
         });
 
         if (appVisible) {
-          // Page is open & visible — trigger print on it
           _broadcastToClients({ type: 'AUTO_PRINT_TRIGGER', orders: toPrint });
         } else {
-          // Queue for when page opens
           _loadPrintQueue().then(function(existing) {
             var merged = existing.slice();
             toPrint.forEach(function(o) {
@@ -365,32 +364,44 @@ function _handleOrdersObject(data, silent) {
     }
   }
 
-  // ── 3. System notification — ALWAYS fires (locked screen, background) ──
-  var appUrl = self.registration.scope + 'owner.html';
-  var notifPromises = newOrders.map(function(o) {
-    var title = '\uD83D\uDD14 New Order \u2014 Table ' + o.tableNumber;
-    var body  = (o.customerName ? o.customerName + ' \u2022 ' : '') +
-                (Array.isArray(o.items)
-                  ? o.items.map(function(i){ return i.qty + 'x ' + i.name; }).join(', ')
-                  : '') +
-                ' \u2022 \u20B9' + (o.total || 0);
-    return self.registration.showNotification(title, {
-      body:               body,
-      tag:                'order-' + o.orderNum,
-      renotify:           true,
-      requireInteraction: true,
-      silent:             false,
-      vibrate:            [500,100,500,100,700,200,500,100,500,100,700],
-      icon:               'icon-192.png',
-      badge:              'icon-192.png',
-      actions: [
-        { action: 'view',       title: '\uD83D\uDCCB View Orders' },
-        { action: 'print_open', title: '\uD83D\uDDA8\uFE0F Print Now' }
-      ],
-      data: { orderNum: o.orderNum, url: appUrl, autoPrint: _autoPrint }
+  // ── 3. System notification — ALWAYS fires (locked screen, background, even when page owns Firebase) ──
+  // This is the ONLY way to ring the phone when the owner's screen is locked or app is minimized
+  self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clients) {
+    // Check if the owner page is currently visible on screen
+    var ownerVisible = clients.some(function(c) {
+      return c.url.indexOf('owner') !== -1 && c.visibilityState === 'visible';
     });
+
+    var appUrl = self.registration.scope + 'owner.html';
+    var notifPromises = newOrders.map(function(o) {
+      var title = '\uD83D\uDD14 New Order \u2014 Table ' + o.tableNumber;
+      var custName = o.customerName || o.name || o.customer_name || '';
+      var body = (custName ? custName + ' \u2022 ' : '') +
+                 (Array.isArray(o.items)
+                   ? o.items.map(function(i){ return i.qty + 'x ' + i.name; }).join(', ')
+                   : '') +
+                 ' \u2022 \u20B9' + (o.total || 0);
+
+      // Always show notification if page is not visible (background/locked)
+      // If page IS visible, the page itself handles the in-app bell — only show notif too for awareness
+      return self.registration.showNotification(title, {
+        body:               body,
+        tag:                'order-' + o.orderNum,
+        renotify:           true,
+        requireInteraction: true,
+        silent:             false,
+        vibrate:            [500,100,500,100,700,200,500,100,500,100,700],
+        icon:               'icon-192.png',
+        badge:              'icon-192.png',
+        actions: [
+          { action: 'view',       title: '\uD83D\uDCCB View Orders' },
+          { action: 'print_open', title: '\uD83D\uDDA8\uFE0F Print Now' }
+        ],
+        data: { orderNum: o.orderNum, url: appUrl, autoPrint: _autoPrint }
+      });
+    });
+    Promise.all(notifPromises).catch(function(){});
   });
-  Promise.all(notifPromises).catch(function(){});
 }
 
 /* ── Notification click ── */

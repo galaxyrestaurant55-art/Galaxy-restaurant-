@@ -101,6 +101,14 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);min-hei
 .order-card.removing{opacity:0;transform:scale(0.97)}
 .pending-card{border-left:3px solid var(--gold)}
 .done-card{border-left:3px solid var(--success);opacity:0.75}
+
+/* New order entrance animation */
+@keyframes slideInCard{from{opacity:0;transform:translateY(-8px) scale(0.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+.order-card{animation:slideInCard 0.2s ease both}
+
+/* Bell ringing animation */
+@keyframes bellRing{0%,100%{transform:rotate(0)}15%{transform:rotate(18deg)}30%{transform:rotate(-16deg)}45%{transform:rotate(12deg)}60%{transform:rotate(-10deg)}75%{transform:rotate(6deg)}90%{transform:rotate(-4deg)}}
+.ringing{animation:bellRing 0.6s ease 3!important}
 .oc-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px}
 .oc-num{font-family:var(--font-head);font-size:15px;font-weight:700;color:var(--gold)}
 .oc-table{font-size:12px;color:var(--text2);margin-top:2px}
@@ -270,42 +278,75 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);min-hei
 </style>
 </head>
 <body>
-<!-- AUDIO SYSTEM: Aggressive unlock + attentive alarm bell -->
+<!-- AUDIO SYSTEM: Aggressive unlock + attentive alarm bell + HTML5 fallback -->
 <script>
 (function(){
   var AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC) return;
 
-  // Lazy-create context on first gesture (avoids autoplay policy rejection)
+  // ── Lazy-create shared AudioContext ──
   function _getOrCreateCtx() {
     if (window._sharedAudioCtx) return window._sharedAudioCtx;
+    if (!AC) return null;
     try {
       window._sharedAudioCtx = new AC();
       return window._sharedAudioCtx;
     } catch(e) { return null; }
   }
 
+  // ── Proactive unlock: resume + play silent buffer so iOS/Android allow future sounds ──
   function _unlock() {
+    if (window._audioUnlocked) return; // already done
     var ctx = _getOrCreateCtx();
     if (!ctx) return;
+    function _doUnlock() {
+      try {
+        var buf = ctx.createBuffer(1, 1, ctx.sampleRate);
+        var src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        src.start(0);
+        window._audioUnlocked = true;
+      } catch(e2){}
+    }
     if (ctx.state === 'suspended') {
-      ctx.resume().then(function() {
-        // Play a real silent buffer to fully unlock on iOS/Android
-        try {
-          var buf = ctx.createBuffer(1, 1, ctx.sampleRate);
-          var src = ctx.createBufferSource();
-          src.buffer = buf;
-          src.connect(ctx.destination);
-          src.start(0);
-          window._audioUnlocked = true;
-        } catch(e2){}
-      });
+      ctx.resume().then(_doUnlock).catch(function(){});
     } else if (ctx.state === 'running') {
-      window._audioUnlocked = true;
+      _doUnlock();
     }
   }
 
-  // Unlock on every possible user gesture — login tap will trigger this
+  // ── Build a tiny WAV bell tone as a data URL for HTML5 Audio fallback ──
+  // This fires even when AudioContext is blocked (e.g. page not yet interacted)
+  function _buildBellWav() {
+    try {
+      var sr = 22050, dur = 0.5;
+      var n = Math.floor(sr * dur);
+      var buf = new ArrayBuffer(44 + n * 2);
+      var v = new DataView(buf);
+      var ws = function(o,s){ for(var i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+      ws(0,'RIFF'); v.setUint32(4,36+n*2,true); ws(8,'WAVE');
+      ws(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true);
+      v.setUint16(22,1,true); v.setUint32(24,sr,true); v.setUint32(28,sr*2,true);
+      v.setUint16(32,2,true); v.setUint16(34,16,true);
+      ws(36,'data'); v.setUint32(40,n*2,true);
+      for(var i=0;i<n;i++){
+        var t=i/sr;
+        var env=Math.exp(-t*9)*(1-Math.exp(-t*80));
+        var s=env*(Math.sin(2*Math.PI*1200*t)+0.5*Math.sin(2*Math.PI*2400*t)+0.25*Math.sin(2*Math.PI*3600*t));
+        var val=Math.max(-32767,Math.min(32767,Math.round(s*28000)));
+        v.setInt16(44+i*2,val,true);
+      }
+      var bytes=new Uint8Array(buf);
+      var binary='';
+      for(var j=0;j<bytes.length;j++) binary+=String.fromCharCode(bytes[j]);
+      return 'data:audio/wav;base64,'+btoa(binary);
+    } catch(e){ return null; }
+  }
+
+  // Pre-build WAV and store on window for use by playAlertBell
+  try { window._bellWavURL = _buildBellWav(); } catch(e){}
+
+  // ── Unlock on every possible user gesture ──
   ['touchstart','touchend','click','keydown','pointerdown','mousedown'].forEach(function(ev){
     document.addEventListener(ev, _unlock, { passive: true, capture: true });
   });
@@ -1243,7 +1284,7 @@ function startDash(){
   _knownOrderNums = null;
   _rpIds=''; _rdIds='';
   _doneLocally={};
-  _pollStop=false; _polling=false;
+  _pollStop=false; _polling=false; _pollFirstDone=false;
   _allOrders=[];
 
   requestNotifPermission();
@@ -1297,7 +1338,6 @@ function _startFirebaseListener(){
   }
 
   _fbListener=_db.ref('orders').on('value',function(snap){
-    var isFirst  = snap._isFirst !== false ? !_fbFirstDone : false;
     var partial  = snap._partialPath; // defined for single-key SSE pushes
 
     if (partial) {
@@ -1323,11 +1363,21 @@ function _startFirebaseListener(){
     cacheOrders(orders);
     _allOrders = orders;
 
-    if (!isFirst || _fbFirstDone) {
+    if (_fbFirstDone) {
       // Only fire alerts after the very first snapshot has been processed
       _detectAndAlert(orders);
+    } else {
+      // First snapshot: seed known order set silently (no bell, no toast)
+      _fbFirstDone = true;
+      var pending = orders.filter(function(o){ return o.status === 'pending'; });
+      _knownOrderNums = new Set(pending.map(function(o){ return String(o.orderNum); }));
+      // Sync to SW
+      try {
+        if(navigator.serviceWorker && navigator.serviceWorker.controller){
+          navigator.serviceWorker.controller.postMessage({type:'KNOWN_ORDERS', nums: Array.from(_knownOrderNums)});
+        }
+      } catch(e){}
     }
-    _fbFirstDone = true;
     _rpIds=''; _rdIds='';
     _paintOrders(orders);
 
@@ -1375,6 +1425,13 @@ function stopDash(){
 
 function _onVisChange(){
   if(document.visibilityState==='visible'){
+    // Reseed knownOrderNums from current in-memory state so we don't re-alert
+    // orders that the SW already notified while we were in background
+    if(_allOrders.length && _knownOrderNums !== null){
+      var pending=_allOrders.filter(function(o){return o.status==='pending';});
+      pending.forEach(function(o){ _knownOrderNums.add(String(o.orderNum)); });
+    }
+
     // Repaint from memory IMMEDIATELY when returning to app
     _rpIds=''; _rdIds='';
     if(_allOrders.length) _paintOrders(_allOrders);
@@ -1399,10 +1456,10 @@ function _onVisChange(){
       runPoll();
     }
   } else {
-    // Page going to background — tell SW it may need to take over alerting
+    // Page going to background — SW will fire system notifications for new orders
+    // Keep sending FIREBASE_ACTIVE so SW doesn't double-broadcast order data
+    // but the SW will still show system notifications (fixed in sw.js)
     if(_fbReady){
-      // Page still owns SSE but won't play bell — SW will fire notification
-      // Keep FIREBASE_ACTIVE so SW doesn't double-broadcast orders
       try{
         if(navigator.serviceWorker&&navigator.serviceWorker.controller){
           navigator.serviceWorker.controller.postMessage({type:'FIREBASE_ACTIVE'});
@@ -1412,6 +1469,7 @@ function _onVisChange(){
   }
 }
 
+var _pollFirstDone = false;
 async function runPoll(){
   if(_pollStop||_polling) return;
   _polling=true;
@@ -1421,7 +1479,14 @@ async function runPoll(){
       orders=_applyDoneLocally(orders);
       cacheOrders(orders);
       _allOrders=orders;
-      _detectAndAlert(orders);
+      if (_pollFirstDone) {
+        _detectAndAlert(orders);
+      } else {
+        _pollFirstDone = true;
+        // Seed known nums silently on first poll
+        var pending=orders.filter(function(o){return o.status==='pending';});
+        if(_knownOrderNums===null) _knownOrderNums=new Set(pending.map(function(o){return String(o.orderNum);}));
+      }
       _paintOrders(orders);
     }
   } catch(e){}
@@ -1434,8 +1499,9 @@ async function runPoll(){
 // Apply local done overrides so Firebase/JSONBin can never revert them
 function _applyDoneLocally(orders){
   return orders.map(function(o){
-    if(_doneLocally[o.orderNum]&&o.status==='pending'){
-      return Object.assign({},o,{status:'done',doneAt:_doneLocally[o.orderNum]});
+    var key = String(o.orderNum);
+    if(_doneLocally[key]&&o.status==='pending'){
+      return Object.assign({},o,{status:'done',doneAt:_doneLocally[key]});
     }
     return o;
   });
@@ -1470,8 +1536,9 @@ function _detectAndAlert(orders){
     showNotifToast(msg);
     if(_autoPrint){
       newPendingOrders.forEach(function(o){
-        if(!_autoPrintPrinted[o.orderNum]){
-          _autoPrintPrinted[o.orderNum]=true;
+        var key=String(o.orderNum);
+        if(!_autoPrintPrinted[key]){
+          _autoPrintPrinted[key]=true;
           savePrinted();
           queuePrint(o);
         }
@@ -1497,7 +1564,17 @@ function _cleanOrders(orders,now){
   });
 }
 
+var _paintPending = false;
 function _paintOrders(orders){
+  if (_paintPending) return; // coalesce rapid-fire calls into one rAF
+  _paintPending = true;
+  requestAnimationFrame(function(){
+    _paintPending = false;
+    _doPaintOrders(orders);
+  });
+}
+
+function _doPaintOrders(orders){
   var now=Date.now();
   var cleaned=_cleanOrders(orders,now);
   var pending=cleaned.filter(function(o){return o.status==='pending';});
@@ -1515,11 +1592,13 @@ function _paintOrders(orders){
   function se(id,v){var el=document.getElementById(id);if(el)el.textContent=v;}
   se('s-pending',pCount);se('s-done',done.length);se('s-revenue','₹'+todayRev);se('s-total',cleaned.length);
 
-  var newPIds=pending.map(function(o){return o.orderNum+':'+(o.orderStatus||'');}).join(',');
-  var newDIds=done.map(function(o){return o.orderNum;}).join(',');
+  var newPIds=pending.map(function(o){return String(o.orderNum)+':'+(o.orderStatus||'');}).join(',');
+  var newDIds=done.map(function(o){return String(o.orderNum);}).join(',');
   if(newPIds!==_rpIds){_rpIds=newPIds; renderCol('pending-col',pending,'pending');}
   if(newDIds!==_rdIds){_rdIds=newDIds; renderCol('done-col',done,'done');}
-  _updateStats(orders);
+  // Only recalculate stats when the stats panel is actually visible
+  var statsPanel=document.getElementById('panel-stats');
+  if(statsPanel&&statsPanel.classList.contains('active')) _updateStats(orders);
 }
 
 function _updateStats(orders){
@@ -1560,17 +1639,18 @@ function renderCol(colId,list,status){
     var itemLines=Array.isArray(o.items)
       ?o.items.map(function(i){return '<div class="oc-item"><strong>'+(parseInt(i.qty)||0)+'×</strong> '+i.name+' — ₹'+((parseInt(i.price)||0)*(parseInt(i.qty)||0))+'</div>';}).join('')
       :'<div class="oc-item">'+o.items+'</div>';
-    var custInfo=o.customerName
-      ?'<div class="oc-cust"><span>👤 '+o.customerName+'</span>'+(o.customerPhone?' &nbsp;📞 '+o.customerPhone:'')+'</div>':'';
+    var custInfo=(o.customerName||o.name||o.customer_name)
+      ?'<div class="oc-cust"><span>👤 '+(o.customerName||o.name||o.customer_name)+'</span>'+((o.customerPhone||o.phone)?' &nbsp;📞 '+(o.customerPhone||o.phone):'')+'</div>':'';
     var orderTypeBadge=o.orderType
       ?'<span class="order-type-badge '+(o.orderType==='packed'?'packed':'dine-in')+'">'+
         (o.orderType==='packed'?'📦 Packed':'🍽️ Dine-In')+'</span>':'';
+    var oNum=String(o.orderNum);
     var curStatus=o.orderStatus||'received';
     var statusChips=status==='pending'
       ?('<div class="status-row">'+
-        '<button class="status-chip received'+(curStatus==='received'?' active-status':'')+'" data-snum="'+o.orderNum+'" data-sval="received">📬 Received</button>'+
-        '<button class="status-chip preparing'+(curStatus==='preparing'?' active-status':'')+'" data-snum="'+o.orderNum+'" data-sval="preparing">👨‍🍳 Preparing</button>'+
-        '<button class="status-chip ready'+(curStatus==='ready'?' active-status':'')+'" data-snum="'+o.orderNum+'" data-sval="ready">✅ Ready</button>'+
+        '<button class="status-chip received'+(curStatus==='received'?' active-status':'')+'" data-snum="'+oNum+'" data-sval="received">📬 Received</button>'+
+        '<button class="status-chip preparing'+(curStatus==='preparing'?' active-status':'')+'" data-snum="'+oNum+'" data-sval="preparing">👨‍🍳 Preparing</button>'+
+        '<button class="status-chip ready'+(curStatus==='ready'?' active-status':'')+'" data-snum="'+oNum+'" data-sval="ready">✅ Ready</button>'+
         '</div>'):'' ;
     var actionsHTML=status==='pending'
       ?'<div class="oc-btns"><button class="print-btn-sm">🖨️ Print</button><button class="mark-done-btn">✓ Mark Done</button></div>'+statusChips
@@ -1580,9 +1660,9 @@ function renderCol(colId,list,status){
        '</div>';
     var card=document.createElement('div');
     card.className='order-card '+status+'-card';
-    card.id='card-'+o.orderNum;
+    card.id='card-'+oNum;
     card.innerHTML=
-      '<div class="oc-top"><div><div class="oc-num">'+o.orderNum+orderTypeBadge+'</div><div class="oc-table">Table '+o.tableNumber+'</div></div>'+
+      '<div class="oc-top"><div><div class="oc-num">'+oNum+orderTypeBadge+'</div><div class="oc-table">Table '+o.tableNumber+'</div></div>'+
       '<div><span class="oc-status '+status+'">'+(status==='pending'?'● Pending':'✓ Done')+'</span><div class="oc-time">'+o.timestamp+'</div></div></div>'+
       custInfo+
       '<div class="oc-items">'+itemLines+'</div>'+
@@ -1618,8 +1698,9 @@ function renderCol(colId,list,status){
 // DELETE COMPLETED ORDER
 // ══════════════════════════════════════════════════════════════════
 async function deleteCompletedOrder(orderNum){
+  orderNum = String(orderNum);
   if(!confirm('Delete this completed order?')) return;
-  _allOrders=_allOrders.filter(function(o){ return o.orderNum!==orderNum; });
+  _allOrders=_allOrders.filter(function(o){ return String(o.orderNum)!==orderNum; });
   delete _doneLocally[orderNum];
   cacheOrders(_allOrders);
   _rpIds=''; _rdIds='';
@@ -1629,7 +1710,7 @@ async function deleteCompletedOrder(orderNum){
     if(_fbReady){ await fbRemove(orderNum); }
     else{
       var orders=await jbGet();
-      if(orders){ await jbPut(orders.filter(function(o){ return o.orderNum!==orderNum; })); }
+      if(orders){ await jbPut(orders.filter(function(o){ return String(o.orderNum)!==orderNum; })); }
     }
   }catch(e){ toast('Delete failed — try again'); }
 }
@@ -1638,15 +1719,17 @@ async function deleteCompletedOrder(orderNum){
 // MARK DONE — instant, bulletproof, never shows in both columns
 // ══════════════════════════════════════════════════════════════════
 async function markDone(orderNum){
+  // Normalize to string for consistent comparison
+  orderNum = String(orderNum);
   if(_markingDone[orderNum]) return;
   _markingDone[orderNum]=true;
 
   var doneAt=new Date().toISOString();
 
-  // Step 1: Update in-memory store immediately
+  // Step 1: Update in-memory store immediately (compare as strings)
   var found=false;
   _allOrders=_allOrders.map(function(o){
-    if(o.orderNum===orderNum){
+    if(String(o.orderNum)===orderNum){
       found=true;
       return Object.assign({},o,{status:'done',doneAt:doneAt});
     }
@@ -1685,12 +1768,12 @@ async function markDone(orderNum){
   // Step 7: Write to backend (non-blocking)
   try {
     if(_fbReady){
-      await fbUpdate(orderNum,{status:'done',doneAt:doneAt});
+      await fbUpdate(String(orderNum),{status:'done',doneAt:doneAt});
     } else {
       var orders=await jbGet();
       if(orders){
         orders=orders.map(function(o){
-          return o.orderNum===orderNum?Object.assign({},o,{status:'done',doneAt:doneAt}):o;
+          return String(o.orderNum)===orderNum?Object.assign({},o,{status:'done',doneAt:doneAt}):o;
         });
         await jbPut(orders);
       }
@@ -1701,7 +1784,7 @@ async function markDone(orderNum){
     // Revert
     delete _doneLocally[orderNum];
     _allOrders=_allOrders.map(function(o){
-      return o.orderNum===orderNum?Object.assign({},o,{status:'pending',doneAt:null}):o;
+      return String(o.orderNum)===orderNum?Object.assign({},o,{status:'pending',doneAt:null}):o;
     });
     cacheOrders(_allOrders);
     _rpIds=''; _rdIds='';
@@ -1713,14 +1796,25 @@ async function markDone(orderNum){
 
 // ── UPDATE ORDER STATUS (received/preparing/ready) ──
 async function updateOrderStatus(orderNum, newStatus){
+  orderNum = String(orderNum);
   _allOrders=_allOrders.map(function(o){
-    return o.orderNum===orderNum?Object.assign({},o,{orderStatus:newStatus}):o;
+    return String(o.orderNum)===orderNum?Object.assign({},o,{orderStatus:newStatus}):o;
   });
   cacheOrders(_allOrders);
   _rpIds=''; _rdIds='';
   _paintOrders(_allOrders);
   try {
     if(_fbReady) await fbUpdate(orderNum,{orderStatus:newStatus});
+    else {
+      var orders=await jbGet();
+      if(orders){
+        orders=orders.map(function(o){
+          return String(o.orderNum)===orderNum?Object.assign({},o,{orderStatus:newStatus}):o;
+        });
+        await jbPut(orders);
+      }
+    }
+    toast('Status: '+newStatus+' ✓');
   } catch(e){ toast('❌ Status update failed'); }
 }
 
@@ -1777,14 +1871,30 @@ function _doAlarm(ctx) {
 
 function playAlertBell() {
   var now = Date.now();
-  // Debounce: don't stack if bell already fired in last 200ms
-  if (now - _lastBellTime < 200) return;
+  // Debounce: don't stack if bell already fired in last 300ms
+  if (now - _lastBellTime < 300) return;
   _lastBellTime = now;
 
   // ── Vibration (works even on silent mode) ──
   try { if (navigator.vibrate) navigator.vibrate([400,100,400,100,600,200,400,100,400]); } catch(e){}
 
-  // ── Audio ──
+  // ── HTML5 Audio fallback: always fires even if AudioContext is blocked ──
+  if (window._bellWavURL) {
+    try {
+      var bellAudio = new Audio(window._bellWavURL);
+      bellAudio.volume = 1.0;
+      bellAudio.play().catch(function(){});
+      // Play 2 more times with delays
+      setTimeout(function(){
+        try{ var a2=new Audio(window._bellWavURL); a2.volume=1.0; a2.play().catch(function(){}); }catch(e){}
+      }, 600);
+      setTimeout(function(){
+        try{ var a3=new Audio(window._bellWavURL); a3.volume=1.0; a3.play().catch(function(){}); }catch(e){}
+      }, 1200);
+    } catch(e){}
+  }
+
+  // ── AudioContext bell (higher quality when available) ──
   try {
     var AC  = window.AudioContext || window.webkitAudioContext;
     var ctx = window._sharedAudioCtx || (AC ? new AC() : null);
@@ -1799,12 +1909,12 @@ function playAlertBell() {
         window._audioUnlocked = true;
         _doAlarm(ctx);
       }).catch(function(err) {
-        console.warn('[Bell] AudioContext blocked — needs user tap first:', err.message);
+        // AudioContext blocked — HTML5 fallback already handled above
       });
     }
   } catch(e) { console.warn('[Bell] Audio error:', e); }
 
-  // ── Repeat 2 more times, 4s apart, for persistence ──
+  // ── Repeat AudioContext bell 2 more times ──
   clearInterval(_bellInterval);
   var _bellCount = 0;
   _bellInterval = setInterval(function() {
@@ -2048,32 +2158,45 @@ function confirmDelete(){
 // ══════════════════════════════════════════════════════════════════
 // QR CODE
 // ══════════════════════════════════════════════════════════════════
+function _stripMenuFilename(url){
+  // Remove trailing /customer-menu.html or /owner.html if present
+  return url.replace(/\/+(customer-menu\.html|owner\.html)(\?.*)?$/i,'').replace(/\/+$/,'');
+}
 function _getMenuURL(){
   // Priority 1: manually set SITE_URL (hardcoded in source)
-  if(SITE_URL) return SITE_URL.replace(/\/+$/,'') + '/customer-menu.html';
+  if(SITE_URL) return _stripMenuFilename(SITE_URL) + '/customer-menu.html';
   // Priority 2: saved via UI input (persisted in localStorage)
   var saved = '';
   try { saved = localStorage.getItem('gmf_site_url') || ''; } catch(e){}
-  if(saved) return saved.replace(/\/+$/,'') + '/customer-menu.html';
-  // Priority 3: auto-detect from current page URL (works on Netlify, GitHub Pages, any https host)
+  if(saved) return _stripMenuFilename(saved) + '/customer-menu.html';
+  // Priority 3: auto-detect from current page URL (Netlify, GitHub Pages, any https host)
   var loc = window.location;
-  if(loc.protocol === 'https:' || (loc.protocol === 'http:' && loc.hostname !== 'localhost' && loc.hostname !== '127.0.0.1')){
+  if(loc.protocol === 'https:' || (loc.protocol === 'http:' && loc.hostname !== 'localhost' && loc.hostname !== '127.0.0.1' && loc.hostname !== '')){
     var pathname = loc.pathname;
+    // Strip the current filename (owner.html or index.html etc.) to get the directory
     var lastSlash = pathname.lastIndexOf('/');
     var dir = lastSlash >= 0 ? pathname.substring(0, lastSlash + 1) : '/';
-    var base = loc.protocol + '//' + loc.host + dir;
-    return base + 'customer-menu.html';
+    var base = loc.protocol + '//' + loc.host + dir.replace(/\/+$/, '');
+    return base + '/customer-menu.html';
   }
   // Fallback for localhost / file:// — show a warning
   return null;
+}
+function _getMenuBaseURL(){
+  // Returns just the site base (no /customer-menu.html) for display in the input
+  var url = _getMenuURL();
+  if(!url) return '';
+  return url.replace(/\/customer-menu\.html$/,'');
 }
 
 function saveQRSiteURL(){
   var input = document.getElementById('qr-site-url-input');
   if(!input) return;
-  var val = input.value.trim().replace(/\/+$/, '');
+  var val = _stripMenuFilename(input.value.trim());
   if(!val){ toast('⚠️ Please paste your website URL first'); return; }
   if(!val.startsWith('http')){ toast('⚠️ URL must start with https://'); return; }
+  // Normalise the input to show the cleaned base URL
+  input.value = val;
   try { localStorage.setItem('gmf_site_url', val); } catch(e){}
   toast('✅ URL saved!');
   setQR();
@@ -2085,11 +2208,11 @@ function setQR(){
   var warn=document.getElementById('qr-host-warn');
   var input=document.getElementById('qr-site-url-input');
 
-  // Pre-fill input with currently saved URL (so owner can see/edit it)
+  // Always pre-fill input with best available base URL (saved > auto-detected)
+  // so the owner can always see/edit the current target
   if(input && !input.value){
-    var savedBase = '';
-    try { savedBase = localStorage.getItem('gmf_site_url') || SITE_URL || ''; } catch(e){ savedBase = SITE_URL || ''; }
-    if(savedBase) input.value = savedBase.replace(/\/+$/, '');
+    var baseToShow = _getMenuBaseURL();
+    if(baseToShow) input.value = baseToShow;
   }
 
   if(!url){
@@ -2099,6 +2222,7 @@ function setQR(){
     return;
   }
   if(warn) warn.style.display='none';
+  // Build QR — use encodeURIComponent so special chars survive the URL param
   if(img) img.src='https://api.qrserver.com/v1/create-qr-code/?size=200x200&color=1a0a0a&bgcolor=ffffff&data='+encodeURIComponent(url);
   if(urlEl) urlEl.textContent=url;
 }
@@ -2508,16 +2632,19 @@ async function togglePrinterConnect(){
 function _buildCustomerMap(orders){
   var map={};
   orders.forEach(function(o){
-    if(!o.customerPhone||!o.customerName) return;
-    var phone=o.customerPhone.toString().trim();
+    // Support multiple field name variations from different order sources
+    var phone=(o.customerPhone||o.phone||o.customer_phone||'').toString().trim();
+    var name=(o.customerName||o.name||o.customer_name||'').toString().trim();
+    if(!phone||!name) return;
+    var ts=o.createdAt||o.timestamp||'';
     if(!map[phone]){
-      map[phone]={name:o.customerName,phone:phone,orders:0,lastTable:o.tableNumber,lastTime:o.createdAt||o.timestamp};
+      map[phone]={name:name,phone:phone,orders:0,lastTable:o.tableNumber,lastTime:ts};
     }
     map[phone].orders++;
-    if((o.createdAt||'')>(map[phone].lastTime||'')) {
-      map[phone].lastTime=o.createdAt;
+    if(ts>(map[phone].lastTime||'')){
+      map[phone].lastTime=ts;
       map[phone].lastTable=o.tableNumber;
-      map[phone].name=o.customerName;
+      map[phone].name=name;
     }
   });
   return Object.values(map).sort(function(a,b){return b.orders-a.orders;});

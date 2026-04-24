@@ -435,7 +435,7 @@ function selectOrderType(type){
   document.getElementById('btn-dinein').classList.toggle('selected', type==='dine-in');
   document.getElementById('btn-packed').classList.toggle('selected', type==='packed');
 }
-document.addEventListener('DOMContentLoaded', function(){ loadCustomerMemory(); });
+// loadCustomerMemory() is called in the init block below — no need for DOMContentLoaded here
 </script>
 
 <script>
@@ -509,32 +509,57 @@ var deletedIds = [];
 
 // ══════════════════════════════════════════════════════════════════
 // FIREBASE INIT + LIVE MENU SYNC
-// Listens to menuState node — owner price/stock changes arrive
-// on every customer device instantly with no refresh needed.
+// Probes connectivity before trusting Firebase.
+// Menu renders from localStorage IMMEDIATELY while probe runs.
+// Listens to menuState node — owner changes arrive on every device.
 // ══════════════════════════════════════════════════════════════════
 (function initFirebase() {
   try {
     if (typeof firebase === 'undefined') throw new Error('SDK missing');
     var app = firebase.apps.length ? firebase.app() : firebase.initializeApp(firebaseConfig);
     _db = app.database();
-    _fbReady = true;
-    console.log('[Galaxy Customer] Firebase ready, using live stream.');
-
-    _db.ref('menuState').on('value', function(snap) {
-      var data = snap.val();
-      if (!data) return;
-      var changed = false;
-      if (data.overrides !== undefined) { menuOverrides = data.overrides || {}; changed = true; try { localStorage.setItem('gmf_overrides', JSON.stringify(menuOverrides)); } catch (e) {} }
-      if (data.custom !== undefined) { customItems = data.custom || []; changed = true; try { localStorage.setItem('gmf_custom', JSON.stringify(customItems)); } catch (e) {} }
-      if (data.deleted !== undefined) { deletedIds = data.deleted || []; changed = true; try { localStorage.setItem('gmf_deleted', JSON.stringify(deletedIds)); } catch (e) {} }
-      if (changed) renderMenu();
-    }, function(err) {
-      console.warn('[Galaxy Customer] menuState sync error:', err.message);
-    });
+    // _fbReady stays false until we confirm network connectivity
   } catch (e) {
     console.warn('[Galaxy Customer] Firebase SDK error:', e.message);
     _fbReady = false;
+    return;
   }
+
+  // Probe Firebase connectivity before trusting it for writes
+  var probeUrl = firebaseConfig.databaseURL + '/.json?t=' + Date.now();
+  var x = new XMLHttpRequest();
+  x.open('GET', probeUrl);
+  x.timeout = 5000;
+  x.onload = function() {
+    if (x.status === 200 || x.status === 204) {
+      _fbReady = true;
+      console.log('[Galaxy Customer] Firebase connected ✅ — live menu sync active');
+      // Subscribe to live menu state now that we know the connection works
+      _db.ref('menuState').on('value', function(snap) {
+        var data = snap.val();
+        if (!data) return;
+        var changed = false;
+        if (data.overrides !== undefined) { menuOverrides = data.overrides || {}; changed = true; try { localStorage.setItem('gmf_overrides', JSON.stringify(menuOverrides)); } catch (e) {} }
+        if (data.custom !== undefined)    { customItems   = data.custom    || []; changed = true; try { localStorage.setItem('gmf_custom',    JSON.stringify(customItems));   } catch (e) {} }
+        if (data.deleted !== undefined)   { deletedIds    = data.deleted   || []; changed = true; try { localStorage.setItem('gmf_deleted',   JSON.stringify(deletedIds));    } catch (e) {} }
+        if (changed) renderMenu();
+      }, function(err) {
+        console.warn('[Galaxy Customer] menuState sync error:', err.message);
+      });
+    } else {
+      console.warn('[Galaxy Customer] Firebase REST returned', x.status, '— using JSONBin fallback');
+      _fbReady = false;
+    }
+  };
+  x.onerror = function() {
+    console.warn('[Galaxy Customer] Firebase unreachable — JSONBin fallback active');
+    _fbReady = false;
+  };
+  x.ontimeout = function() {
+    console.warn('[Galaxy Customer] Firebase timeout — JSONBin fallback active');
+    _fbReady = false;
+  };
+  x.send();
 })();
 
 // -- LOAD MENU STATE (localStorage seed while Firebase connects) --
