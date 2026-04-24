@@ -273,21 +273,26 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);min-hei
 <!-- AUDIO SYSTEM: Aggressive unlock + attentive alarm bell -->
 <script>
 (function(){
-  // Create context immediately
   var AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return;
-  var _ctx;
-  try { _ctx = new AC(); window._sharedAudioCtx = _ctx; } catch(e){ return; }
 
-  // Unlock on EVERY possible user gesture
-  function _unlock(e) {
-    if (!window._sharedAudioCtx) return;
-    var ctx = window._sharedAudioCtx;
+  // Lazy-create context on first gesture (avoids autoplay policy rejection)
+  function _getOrCreateCtx() {
+    if (window._sharedAudioCtx) return window._sharedAudioCtx;
+    try {
+      window._sharedAudioCtx = new AC();
+      return window._sharedAudioCtx;
+    } catch(e) { return null; }
+  }
+
+  function _unlock() {
+    var ctx = _getOrCreateCtx();
+    if (!ctx) return;
     if (ctx.state === 'suspended') {
       ctx.resume().then(function() {
-        // Play a REAL silent sound to fully unlock iOS/Android
+        // Play a real silent buffer to fully unlock on iOS/Android
         try {
-          var buf = ctx.createBuffer(1, ctx.sampleRate * 0.1, ctx.sampleRate);
+          var buf = ctx.createBuffer(1, 1, ctx.sampleRate);
           var src = ctx.createBufferSource();
           src.buffer = buf;
           src.connect(ctx.destination);
@@ -295,13 +300,14 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);min-hei
           window._audioUnlocked = true;
         } catch(e2){}
       });
-    } else {
+    } else if (ctx.state === 'running') {
       window._audioUnlocked = true;
     }
   }
-  // Attach to every possible event — login button tap will unlock it
-  ['touchstart','touchend','click','keydown','scroll','pointerdown'].forEach(function(ev){
-    document.addEventListener(ev, _unlock, {once:false, passive:true, capture:true});
+
+  // Unlock on every possible user gesture — login tap will trigger this
+  ['touchstart','touchend','click','keydown','pointerdown','mousedown'].forEach(function(ev){
+    document.addEventListener(ev, _unlock, { passive: true, capture: true });
   });
 })();
 </script>
@@ -508,19 +514,31 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);min-hei
       <div class="qr-title">📱 Customer QR Code</div>
       <div class="qr-sub">Place this on each table — customers scan to open the menu instantly.</div>
 
-      <!-- Warning shown only when not hosted on a real website -->
-      <div id="qr-host-warn" style="display:none;background:rgba(224,85,85,0.12);border:1px solid rgba(224,85,85,0.4);border-radius:12px;padding:16px 18px;margin:0 auto 20px;max-width:380px;text-align:left">
-        <div style="font-size:13px;font-weight:700;color:var(--danger);margin-bottom:8px">⚠️ Files not hosted yet</div>
-        <div style="font-size:12px;color:var(--text2);line-height:1.7">
-          To generate a working QR code, upload <strong>both files</strong> to a free website:<br><br>
-          <strong style="color:var(--gold)">Option A — Netlify (easiest):</strong><br>
-          1. Go to <strong>netlify.com</strong> → Log in free<br>
-          2. Drag &amp; drop the folder with <em>owner.html</em> + <em>customer-menu.html</em> + <em>sw.js</em><br>
-          3. Copy your site URL (e.g. <em>https://abc123.netlify.app</em>)<br>
-          4. Paste it in <code style="background:var(--bg3);padding:2px 6px;border-radius:4px">SITE_URL = '...'</code> in owner.html<br><br>
-          <strong style="color:var(--gold)">Option B — Auto (already works):</strong><br>
-          If you opened owner.html from a hosted URL (https://...), the QR is auto-generated. Just refresh this tab.
+      <!-- Manual URL input — always visible so owner can set/override URL anytime -->
+      <div id="qr-url-setter" style="background:rgba(232,160,69,0.07);border:1px solid var(--border2);border-radius:12px;padding:14px 16px;margin:0 auto 20px;max-width:420px;text-align:left">
+        <div style="font-size:12px;font-weight:700;color:var(--gold);margin-bottom:8px">🔗 Set your website URL</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="qr-site-url-input" type="url" placeholder="https://your-site.netlify.app"
+            style="flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);
+                   padding:9px 12px;border-radius:var(--radius2);font-size:13px;outline:none;min-width:0"
+            onfocus="this.style.borderColor='var(--gold3)'"
+            onblur="this.style.borderColor='var(--border)'"
+            onkeydown="if(event.key==='Enter')saveQRSiteURL()">
+          <button onclick="saveQRSiteURL()" style="background:var(--gold);border:none;color:var(--bg);
+            padding:9px 16px;border-radius:var(--radius2);font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap">
+            Generate QR
+          </button>
         </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:7px;line-height:1.6">
+          Upload both files to <strong style="color:var(--gold2)">netlify.com</strong> (free), copy your site URL, paste above → tap Generate QR.<br>
+          The QR will point customers to <em>customer-menu.html</em> on your site.
+        </div>
+      </div>
+
+      <!-- Warning shown only when not hosted and no URL set -->
+      <div id="qr-host-warn" style="display:none;background:rgba(224,85,85,0.12);border:1px solid rgba(224,85,85,0.4);border-radius:12px;padding:14px 16px;margin:0 auto 20px;max-width:420px;text-align:left">
+        <div style="font-size:13px;font-weight:700;color:var(--danger);margin-bottom:6px">⚠️ No URL set yet</div>
+        <div style="font-size:12px;color:var(--text2);line-height:1.6">Paste your Netlify site URL above and tap <strong>Generate QR</strong> to create your customer QR code.</div>
       </div>
 
       <div class="qr-frame"><img id="qr-img" src="" alt="QR Code" width="180" height="180" style="min-height:180px"></div>
@@ -604,15 +622,33 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);min-hei
 
 <!-- Firebase SDK -->
 <script>
-/* ── FIREBASE COMPAT SDK (inline, REST polling — no CDN, no SSE) ──────────
-   Uses Firebase REST API for all reads/writes.
-   Real-time "on('value')" listeners poll every 1500ms (same as JSONBin fallback).
-   REQUIREMENT: Firebase Console → Realtime Database → Rules must be:
+/* ── FIREBASE REST SDK — SSE (real-time push) + REST writes ───────────────
+   Uses Firebase Realtime Database REST API.
+   on('value') opens a true SSE stream: orders arrive in ~100ms, zero polling.
+   Falls back to 1500ms polling only if SSE is unsupported.
+   REQUIREMENT: Firebase Console → Realtime Database → Rules:
    { "rules": { ".read": true, ".write": true } }
 ─────────────────────────────────────────────────────────────────────────── */
 var firebase = (function() {
   'use strict';
   var _apps = [], _defaultApp = null;
+
+  /* ── XHR helper for writes ── */
+  function xhr(method, url, body) {
+    return new Promise(function(resolve, reject) {
+      var x = new XMLHttpRequest();
+      x.open(method, url);
+      if (body !== null) x.setRequestHeader('Content-Type', 'application/json');
+      x.onload = function() {
+        if (x.status >= 200 && x.status < 300) resolve(x.responseText);
+        else reject(new Error(method + ' ' + x.status));
+      };
+      x.onerror   = function() { reject(new Error('Network error')); };
+      x.ontimeout = function() { reject(new Error('Timeout')); };
+      x.timeout   = 9000;
+      x.send(body !== null ? JSON.stringify(body) : null);
+    });
+  }
 
   function App(cfg) { this.options = cfg; this._db = null; }
   App.prototype.database = function() {
@@ -622,87 +658,162 @@ var firebase = (function() {
 
   function Database(baseURL) {
     this._base = baseURL.replace(/\/$/, '');
-    this._listeners = {};
+    this._sseStreams = {}; // path → { abort, cbs }
   }
   Database.prototype.ref = function(path) {
     return new Ref(this, (path || '').replace(/^\/+/, ''));
   };
 
   function Ref(db, path) {
-    this._db = db; this.path = path;
-    this.key = path ? path.split('/').pop() : null;
+    this._db  = db;
+    this.path = path;
+    this.key  = path ? path.split('/').pop() : null;
   }
 
   Ref.prototype._url = function(qs) {
     return this._db._base + '/' + this.path + '.json' + (qs ? '?' + qs : '');
   };
 
-  function xhr(method, url, body, resolve, reject) {
-    var x = new XMLHttpRequest();
-    x.open(method, url);
-    if (body !== null) x.setRequestHeader('Content-Type', 'application/json');
-    x.onload = function() {
-      if (x.status >= 200 && x.status < 300) resolve(x.responseText);
-      else reject(new Error(method + ' ' + x.status + ': ' + x.responseText));
-    };
-    x.onerror = function() { reject(new Error('Network error (' + method + ' ' + url + ')')); };
-    x.ontimeout = function() { reject(new Error('Timeout (' + method + ')')); };
-    x.timeout = 8000;
-    x.send(body !== null ? JSON.stringify(body) : null);
-  }
-
-  Ref.prototype.set = function(data) {
-    var url = this._url();
-    return new Promise(function(res, rej) { xhr('PUT', url, data, res, rej); });
-  };
-
-  Ref.prototype.update = function(data) {
-    var url = this._url();
-    return new Promise(function(res, rej) { xhr('PATCH', url, data, res, rej); });
-  };
-
-  Ref.prototype.remove = function() {
-    var url = this._url();
-    return new Promise(function(res, rej) { xhr('DELETE', url, null, res, rej); });
-  };
+  Ref.prototype.set    = function(data) { return xhr('PUT',    this._url(), data); };
+  Ref.prototype.update = function(data) { return xhr('PATCH',  this._url(), data); };
+  Ref.prototype.remove = function()     { return xhr('DELETE', this._url(), null); };
 
   Ref.prototype.once = function(event, cb, errCb) {
-    var self = this;
-    var url  = self._url('t=' + Date.now());
-    return new Promise(function(resolve, reject) {
-      xhr('GET', url, null, function(text) {
-        try {
-          var snap = new Snapshot(self.key, JSON.parse(text));
-          if (cb) cb(snap);
-          resolve(snap);
-        } catch(e) { if (errCb) errCb(e); else reject(e); }
-      }, function(e) {
-        if (errCb) errCb(e); else reject(e);
-      });
-    });
+    var url = this._url('t=' + Date.now());
+    return xhr('GET', url, null).then(function(text) {
+      var snap = { val: function(){ return JSON.parse(text); } };
+      if (cb) cb(snap);
+      return snap;
+    }).catch(function(e) { if (errCb) errCb(e); else throw e; });
   };
 
+  /* ── on('value') — opens a real SSE stream ── */
   Ref.prototype.on = function(event, cb, errCb) {
     if (event !== 'value') return cb;
-    var self = this, key = self.path;
-    if (!self._db._listeners[key]) self._db._listeners[key] = [];
-    self.once('value', cb, errCb);
-    var iid = setInterval(function() { self.once('value', cb, errCb); }, 1500);
-    self._db._listeners[key].push({ cb: cb, iid: iid });
+    var self  = this;
+    var key   = self.path;
+    var db    = self._db;
+    var entry = db._sseStreams[key];
+
+    // If a stream for this path already exists, just add the callback
+    if (entry) { entry.cbs.push(cb); return cb; }
+
+    entry = { cbs: [cb], abort: null, fallbackTimer: null, isFirst: true };
+    db._sseStreams[key] = entry;
+
+    function _startStream() {
+      // Try SSE first
+      if (typeof EventSource !== 'undefined') {
+        var url = self._url('t=' + Date.now());
+        var es  = new EventSource(url.replace(/\.json/, '.json'));
+
+        // EventSource doesn't support custom headers — use fetch+ReadableStream instead
+        // (EventSource can't send Accept:text/event-stream for Firebase)
+        es.close();
+      }
+
+      // Use fetch + ReadableStream (works in Chrome, Edge, Firefox 65+)
+      if (typeof ReadableStream !== 'undefined' && typeof TextDecoder !== 'undefined') {
+        var ac  = new AbortController();
+        entry.abort = ac;
+        var url = self._db._base + '/' + self.path + '.json?t=' + Date.now();
+
+        fetch(url, {
+          headers: { 'Accept': 'text/event-stream', 'Cache-Control': 'no-cache' },
+          signal:  ac.signal,
+          cache:   'no-store'
+        }).then(function(res) {
+          if (!res.ok || !res.body) throw new Error('SSE unavailable');
+          var reader  = res.body.getReader();
+          var decoder = new TextDecoder();
+          var buf     = '';
+
+          function pump() {
+            return reader.read().then(function(chunk) {
+              if (chunk.done) { setTimeout(_startStream, 2000); return; }
+              buf += decoder.decode(chunk.value, { stream: true });
+
+              var parts = buf.split('\n\n');
+              buf = parts.pop();
+
+              parts.forEach(function(block) {
+                var evtType = '', evtData = '';
+                block.split('\n').forEach(function(ln) {
+                  if (ln.indexOf('event:') === 0) evtType = ln.slice(6).trim();
+                  if (ln.indexOf('data:')  === 0) evtData = ln.slice(5).trim();
+                });
+                if ((evtType === 'put' || evtType === 'patch') && evtData) {
+                  try {
+                    var parsed = JSON.parse(evtData);
+                    // Firebase SSE: initial full snapshot has path='/'
+                    var snap;
+                    if (parsed.path === '/' && parsed.data !== undefined) {
+                      snap = { val: function(){ return parsed.data; }, _isFirst: entry.isFirst };
+                      entry.isFirst = false;
+                    } else if (parsed.path && parsed.path !== '/') {
+                      // Partial update — we still call callback with the single-key object
+                      // Page listener will merge with existing data
+                      snap = { val: function(){ return parsed.data; }, _partialPath: parsed.path, _isFirst: false };
+                      entry.isFirst = false;
+                    }
+                    if (snap) {
+                      entry.cbs.forEach(function(c) {
+                        try { c(snap); } catch(e2) {}
+                      });
+                    }
+                  } catch(ex) {}
+                }
+              });
+              return pump();
+            }).catch(function(err) {
+              if (err && err.name === 'AbortError') return;
+              // SSE failed — fall back to polling
+              _startFallbackPoll();
+            });
+          }
+          return pump();
+        }).catch(function(err) {
+          if (err && err.name === 'AbortError') return;
+          _startFallbackPoll();
+        });
+        return; // SSE started
+      }
+      // No ReadableStream support — go straight to poll
+      _startFallbackPoll();
+    }
+
+    function _startFallbackPoll() {
+      if (entry.fallbackTimer) clearInterval(entry.fallbackTimer);
+      // Immediate first fetch
+      self.once('value', function(snap) {
+        entry.cbs.forEach(function(c){ try { c(snap); } catch(e){} });
+      }, function(){});
+      entry.fallbackTimer = setInterval(function() {
+        self.once('value', function(snap) {
+          entry.cbs.forEach(function(c){ try { c(snap); } catch(e){} });
+        }, function(){});
+      }, 1500);
+    }
+
+    _startStream();
     return cb;
   };
 
   Ref.prototype.off = function(event, cb) {
-    var key = this.path, list = this._db._listeners[key];
-    if (!list) return;
-    this._db._listeners[key] = list.filter(function(e) {
-      if (cb !== undefined && e.cb !== cb) return true;
-      clearInterval(e.iid); return false;
-    });
+    var key   = this.path;
+    var entry = this._db._sseStreams[key];
+    if (!entry) return;
+    if (cb !== undefined) {
+      entry.cbs = entry.cbs.filter(function(c){ return c !== cb; });
+    } else {
+      entry.cbs = [];
+    }
+    if (entry.cbs.length === 0) {
+      if (entry.abort)         { try { entry.abort.abort(); } catch(e){} }
+      if (entry.fallbackTimer) { clearInterval(entry.fallbackTimer); }
+      delete this._db._sseStreams[key];
+    }
   };
-
-  function Snapshot(key, data) { this.key = key; this._data = data; }
-  Snapshot.prototype.val = function() { return this._data; };
 
   return {
     apps: _apps,
@@ -712,7 +823,7 @@ var firebase = (function() {
     },
     app: function() { return _defaultApp; },
     database: function() {
-      if (!_defaultApp) throw new Error('No Firebase app initialized');
+      if (!_defaultApp) throw new Error('No Firebase app');
       return _defaultApp.database();
     }
   };
@@ -746,46 +857,56 @@ var SITE_URL = ''; // ← PASTE YOUR NETLIFY URL HERE
         });
       }
 
-      // When SW activates, sync known orders + printed set + auto-print state
-      navigator.serviceWorker.ready.then(function(r) {
-        var cached = getCachedOrders();
-        var knownNums = cached ? cached.filter(function(o){ return o.status==='pending'; }).map(function(o){ return o.orderNum; }) : [];
-        var target = r.active || r.installing || r.waiting;
-        if(!target) return;
-        target.postMessage({ type: 'KNOWN_ORDERS', nums: knownNums });
-        target.postMessage({ type: 'PRINTED_NUMS',  nums: _autoPrintPrinted });
-        target.postMessage({ type: 'AUTO_PRINT',    enabled: _autoPrint });
-        // Check for any print jobs queued while app was closed/background
-        if(_autoPrint){
-          setTimeout(function(){
-            target.postMessage({ type: 'GET_PRINT_QUEUE' });
-          }, 3000); // delay so printer can connect first if needed
-        }
-      });
+      // startDash() handles SW sync after login — nothing needed here at registration time
 
       // Listen for SW messages (new order detected in background)
       navigator.serviceWorker.addEventListener('message', function(e) {
         if (!e.data) return;
 
-        // ── New orders detected by SW ──
-        if (e.data.type === 'NEW_ORDERS' && e.data.allPending) {
-          var all = e.data.allPending;
-          if (document.visibilityState !== 'visible') {
-            _detectAndAlert(all);
-          }
-          _paintOrders(all);
-          _allOrders = all;
-          cacheOrders(all);
+        // ── SW_ORDERS_UPDATE: SW broadcasting live orders (used when page NOT on Firebase) ──
+        if (e.data.type === 'SW_ORDERS_UPDATE' && e.data.allPending && !_fbReady) {
+          var swOrders = _applyDoneLocally(e.data.allPending);
+          _allOrders = swOrders;
+          cacheOrders(swOrders);
+          _rpIds=''; _rdIds='';
+          _paintOrders(swOrders);
         }
 
-        // ── Auto-print trigger from SW (app was foreground when SW sent it) ──
+        // ── New orders detected by SW (only fires when _fbReady is false) ──
+        if (e.data.type === 'NEW_ORDERS' && e.data.orders && !_fbReady) {
+          var newOrds = e.data.orders;
+          var allPend = e.data.allPending || _allOrders;
+          var msg = newOrds.length + ' new order' + (newOrds.length > 1 ? 's' : '') + ' received!';
+          var latest = newOrds[newOrds.length - 1];
+          if (latest) msg += ' Table ' + latest.tableNumber + (latest.customerName ? ' — ' + latest.customerName : '') + ' — ₹' + (parseInt(latest.total)||0);
+          // Sound first, then UI
+          playAlertBell();
+          ringBell();
+          showNotifToast(msg);
+
+          if (_autoPrint) {
+            newOrds.forEach(function(o) {
+              if (!_autoPrintPrinted[o.orderNum]) {
+                _autoPrintPrinted[o.orderNum] = true;
+                savePrinted();
+                setTimeout(function(){ queuePrint(o); }, 300);
+              }
+            });
+          }
+          var merged = _applyDoneLocally(allPend);
+          _allOrders = merged;
+          cacheOrders(merged);
+          _rpIds=''; _rdIds='';
+          _paintOrders(merged);
+        }
+
+        // ── Auto-print trigger from SW (fires even when _fbReady) ──
         if (e.data.type === 'AUTO_PRINT_TRIGGER' && e.data.orders && _autoPrint) {
           e.data.orders.forEach(function(o) {
             if (!_autoPrintPrinted[o.orderNum]) {
               _autoPrintPrinted[o.orderNum] = true;
               savePrinted();
-              // Small delay so BT stack is ready
-              setTimeout(function(){ queuePrint(o); }, 600);
+              setTimeout(function(){ queuePrint(o); }, 300);
             }
           });
         }
@@ -799,12 +920,10 @@ var SITE_URL = ''; // ← PASTE YOUR NETLIFY URL HERE
             _autoPrintPrinted[o.orderNum] = true;
           });
           savePrinted();
-          // Print each queued order with a stagger so printer buffer doesn't overflow
           toPrint.forEach(function(o, i){
             setTimeout(function(){ queuePrint(o); }, i * 1800);
           });
           if (toPrint.length) toast('🖨️ Printing ' + toPrint.length + ' queued order' + (toPrint.length > 1 ? 's' : '')+'…');
-          // Tell SW the queue is consumed
           if (navigator.serviceWorker && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_PRINT_QUEUE' });
           }
@@ -813,14 +932,21 @@ var SITE_URL = ''; // ← PASTE YOUR NETLIFY URL HERE
         // ── Notification action button tapped ──
         if (e.data.type === 'NOTIFICATION_CLICK') {
           if (e.data.action === 'print_open' || e.data.autoPrint) {
-            // Request any queued print jobs immediately
             if (navigator.serviceWorker && navigator.serviceWorker.controller) {
               navigator.serviceWorker.controller.postMessage({ type: 'GET_PRINT_QUEUE' });
             }
           }
-          // Switch to orders tab so user sees them
           switchTab('orders');
         }
+      });
+
+      // Tell SW when page unloads so it can take over Firebase monitoring
+      window.addEventListener('beforeunload', function() {
+        try {
+          if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({ type: 'FIREBASE_INACTIVE' });
+          }
+        } catch(e){}
       });
     })
     .catch(function(err) {
@@ -869,14 +995,14 @@ function initFirebase() {
   x.onload = function() {
     if (x.status === 200 || x.status === 204) {
       _fbReady = true;
-      console.log('[Galaxy Owner] Firebase connected ✅ — upgrading to Firebase listener');
-      // Upgrade from JSONBin polling to Firebase real-time listener
+      console.log('[Galaxy Owner] Firebase connected ✅ — upgrading to SSE Firebase listener');
+      // Stop JSONBin polling — Firebase SSE takes over
       _pollStop = true;
       clearTimeout(_nextPollTimer);
       _startFirebaseListener();
-      // Tell SW to stop its own polling (Firebase listener covers it)
+      // Tell SW page owns the real Firebase stream
       if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({ type: 'STOP_POLL' });
+        navigator.serviceWorker.controller.postMessage({ type: 'FIREBASE_ACTIVE' });
       }
     } else {
       console.warn('[Galaxy Owner] Firebase REST returned', x.status, '— using JSONBin');
@@ -961,11 +1087,14 @@ function loadState() {
   try { deletedIds        = JSON.parse(localStorage.getItem('gmf_deleted')||'[]');   } catch(e){}
   try { _autoPrint        = localStorage.getItem('gmf_autoprint') === '1';           } catch(e){}
   try { _autoPrintPrinted = JSON.parse(localStorage.getItem('gmf_printed')||'{}');   } catch(e){}
+  // Restore printer name for auto-reconnect after refresh
+  try { _btDeviceName     = localStorage.getItem('gmf_printer_name') || null;        } catch(e){}
 }
 function saveOverrides(){ try{localStorage.setItem('gmf_overrides',JSON.stringify(menuOverrides));}catch(e){} }
 function saveCustom()   { try{localStorage.setItem('gmf_custom',   JSON.stringify(customItems));}catch(e){} }
 function saveDeleted()  { try{localStorage.setItem('gmf_deleted',  JSON.stringify(deletedIds));}catch(e){} }
 function saveAutoPrint(){ try{localStorage.setItem('gmf_autoprint',_autoPrint?'1':'0');}catch(e){} }
+function savePrinterName(name){ try{ if(name) localStorage.setItem('gmf_printer_name',name); else localStorage.removeItem('gmf_printer_name'); }catch(e){} }
 function savePrinted(){
   var keys=Object.keys(_autoPrintPrinted);
   if(keys.length>300){ keys.slice(0,keys.length-300).forEach(function(k){delete _autoPrintPrinted[k];}); }
@@ -1088,20 +1217,26 @@ function updateClock(){
 function startDash(){
   loadState();
 
-  // Restore auto-print toggle UI
+  // Restore UI toggles
   var apt=document.getElementById('auto-print-toggle');
   if(apt) apt.checked=_autoPrint;
+  var lpt=document.getElementById('loop-print-toggle');
+  if(lpt) lpt.checked=_loopPrint;
   updateStatusBar();
+
+  // Show saved printer name in status bar if we had one
+  if(_btDeviceName){
+    var txt=document.getElementById('printer-status-text');
+    if(txt) txt.textContent=_btDeviceName+' (tap Connect to reconnect)';
+  }
 
   // If opened via "Print Now" notification tap, request queued print jobs
   if(window.location.search.indexOf('autoprint=1')!==-1){
-    // Small delay so SW and BT stack are ready
     setTimeout(function(){
       if(navigator.serviceWorker&&navigator.serviceWorker.controller){
         navigator.serviceWorker.controller.postMessage({type:'GET_PRINT_QUEUE'});
       }
-    }, 2000);
-    // Clean URL without reload
+    }, 1500);
     try{ window.history.replaceState({},'',window.location.pathname); }catch(e){}
   }
 
@@ -1116,33 +1251,96 @@ function startDash(){
   if(clockInterval) clearInterval(clockInterval);
   clockInterval=setInterval(updateClock,1000);
 
-  // Show cache INSTANTLY — no network wait
+  // ── Show cached orders INSTANTLY while network loads ──
   var cached=getCachedOrders();
   if(cached&&cached.length){
     _allOrders=cached;
+    // Pre-populate knownOrderNums from cache so we don't re-alert old orders
+    _knownOrderNums=new Set(
+      cached.filter(function(o){return o.status==='pending';})
+            .map(function(o){return String(o.orderNum);})
+    );
     _rpIds=''; _rdIds='';
     _paintOrders(cached);
   }
+
+  // ── Tell SW page just started (not yet on Firebase) ──
+  navigator.serviceWorker.ready.then(function(reg){
+    var target = reg.active || reg.installing || reg.waiting;
+    if(!target) return;
+    var knownArr = _knownOrderNums ? Array.from(_knownOrderNums) : [];
+    target.postMessage({ type: 'FIREBASE_INACTIVE' }); // SW should run SSE until page connects
+    target.postMessage({ type: 'KNOWN_ORDERS',  nums: knownArr });
+    target.postMessage({ type: 'PRINTED_NUMS',  nums: _autoPrintPrinted });
+    target.postMessage({ type: 'AUTO_PRINT',    enabled: _autoPrint });
+    if(_autoPrint){
+      setTimeout(function(){
+        target.postMessage({ type: 'GET_PRINT_QUEUE' });
+      }, 1000);
+    }
+  }).catch(function(){});
 
   if(_fbReady){ _startFirebaseListener(); }
   else        { _startBroadcastChannel(); _startPolling(); }
 }
 
 function _startFirebaseListener(){
-  if(_fbListener){ _db.ref('orders').off('value',_fbListener); }
+  if(_fbListener){ _db.ref('orders').off('value',_fbListener); _fbListener=null; }
+
+  // Keep a merged snapshot so partial SSE updates (single order changes) work correctly
+  var _fbSnapshot = {};
+  var _fbFirstDone = false;
+
+  // Tell SW immediately that page owns Firebase
+  if(navigator.serviceWorker && navigator.serviceWorker.controller){
+    navigator.serviceWorker.controller.postMessage({ type: 'FIREBASE_ACTIVE' });
+  }
+
   _fbListener=_db.ref('orders').on('value',function(snap){
-    var data=snap.val(), orders=[];
-    if(data) Object.keys(data).forEach(function(k){orders.push(data[k]);});
-    orders=orders.filter(function(o){return !o.init;});
-    // Protect locally-done orders from being reverted
-    orders=_applyDoneLocally(orders);
+    var isFirst  = snap._isFirst !== false ? !_fbFirstDone : false;
+    var partial  = snap._partialPath; // defined for single-key SSE pushes
+
+    if (partial) {
+      // Partial SSE update — merge single order into snapshot
+      var key = partial.replace(/^\//, '');
+      var val = snap.val();
+      if (val === null || val === undefined) { delete _fbSnapshot[key]; }
+      else { _fbSnapshot[key] = val; }
+    } else {
+      // Full snapshot (first load or fallback poll)
+      var fullData = snap.val();
+      _fbSnapshot = {};
+      if (fullData && typeof fullData === 'object') {
+        Object.keys(fullData).forEach(function(k){ _fbSnapshot[k] = fullData[k]; });
+      }
+    }
+
+    var orders = [];
+    Object.keys(_fbSnapshot).forEach(function(k){
+      if(_fbSnapshot[k] && !_fbSnapshot[k].init) orders.push(_fbSnapshot[k]);
+    });
+    orders = _applyDoneLocally(orders);
     cacheOrders(orders);
-    _allOrders=orders;
-    _detectAndAlert(orders);
+    _allOrders = orders;
+
+    if (!isFirst || _fbFirstDone) {
+      // Only fire alerts after the very first snapshot has been processed
+      _detectAndAlert(orders);
+    }
+    _fbFirstDone = true;
     _rpIds=''; _rdIds='';
     _paintOrders(orders);
+
+    // Keep SW in sync — tell it page is handling Firebase so it only does safety poll
+    if(navigator.serviceWorker && navigator.serviceWorker.controller){
+      navigator.serviceWorker.controller.postMessage({ type: 'FIREBASE_ACTIVE' });
+    }
   }, function(err){
     console.warn('[Galaxy] Firebase listener error — falling back to polling:', err.message);
+    // Tell SW to take over
+    if(navigator.serviceWorker && navigator.serviceWorker.controller){
+      navigator.serviceWorker.controller.postMessage({ type: 'FIREBASE_INACTIVE' });
+    }
     _startPolling();
   });
 }
@@ -1167,6 +1365,12 @@ function stopDash(){
   document.removeEventListener('visibilitychange',_onVisChange);
   if(_bc){ try{_bc.close();}catch(e){} _bc=null; }
   if(_fbReady&&_fbListener){ _db.ref('orders').off('value',_fbListener); _fbListener=null; }
+  // Tell SW page is no longer active — SW should run its own SSE
+  try{
+    if(navigator.serviceWorker&&navigator.serviceWorker.controller){
+      navigator.serviceWorker.controller.postMessage({type:'FIREBASE_INACTIVE'});
+    }
+  }catch(e){}
 }
 
 function _onVisChange(){
@@ -1182,10 +1386,28 @@ function _onVisChange(){
         }
       }catch(e){}
     }
-    // Only restart polling if Firebase is NOT active
-    if(!_fbReady){
+    // If Firebase is active on page, re-assert to SW
+    if(_fbReady){
+      try{
+        if(navigator.serviceWorker&&navigator.serviceWorker.controller){
+          navigator.serviceWorker.controller.postMessage({type:'FIREBASE_ACTIVE'});
+        }
+      }catch(e){}
+    } else {
+      // Only restart polling if Firebase is NOT active
       clearTimeout(_nextPollTimer); _pollStop=false; _polling=false;
       runPoll();
+    }
+  } else {
+    // Page going to background — tell SW it may need to take over alerting
+    if(_fbReady){
+      // Page still owns SSE but won't play bell — SW will fire notification
+      // Keep FIREBASE_ACTIVE so SW doesn't double-broadcast orders
+      try{
+        if(navigator.serviceWorker&&navigator.serviceWorker.controller){
+          navigator.serviceWorker.controller.postMessage({type:'FIREBASE_ACTIVE'});
+        }
+      }catch(e){}
     }
   }
 }
@@ -1226,29 +1448,42 @@ function _detectAndAlert(orders){
   var now=Date.now();
   var cleaned=_cleanOrders(orders,now);
   var pending=cleaned.filter(function(o){return o.status==='pending';});
-  var currentNums=pending.map(function(o){return o.orderNum;});
+  // Always stringify orderNums for consistent Set comparison (Firebase may return numbers or strings)
+  var currentNums=pending.map(function(o){return String(o.orderNum);});
   var newOrders=[];
   if(_knownOrderNums!==null){
-    currentNums.forEach(function(n){if(!_knownOrderNums.has(n)) newOrders.push(n);});
+    currentNums.forEach(function(n){
+      if(!_knownOrderNums.has(n)) newOrders.push(n);
+    });
   }
   _knownOrderNums=new Set(currentNums);
+
   if(newOrders.length>0){
-    var latest=pending[pending.length-1];
+    var newSet=new Set(newOrders);
+    var newPendingOrders=pending.filter(function(o){return newSet.has(String(o.orderNum));});
+    var latest=newPendingOrders[newPendingOrders.length-1]||pending[pending.length-1];
     var msg=newOrders.length+' new order'+(newOrders.length>1?'s':'')+' received!'+
       (latest?' Table '+latest.tableNumber+(latest.customerName?' — '+latest.customerName:'')+' — ₹'+(parseInt(latest.total)||0):'');
-    ringBell(); showNotifToast(msg); playAlertBell();
+    // FIXED: play sound FIRST (before any DOM ops) for lowest latency
+    playAlertBell();
+    ringBell();
+    showNotifToast(msg);
     if(_autoPrint){
-      // Only auto-print the newly arrived orders (not all pending)
-      var newOrderSet=new Set(newOrders);
-      pending.filter(function(o){return newOrderSet.has(o.orderNum);}).forEach(function(o){
-        if(!_autoPrintPrinted[o.orderNum]){_autoPrintPrinted[o.orderNum]=true;savePrinted();queuePrint(o);}
+      newPendingOrders.forEach(function(o){
+        if(!_autoPrintPrinted[o.orderNum]){
+          _autoPrintPrinted[o.orderNum]=true;
+          savePrinted();
+          queuePrint(o);
+        }
       });
     }
   }
-  // Keep SW in sync
-  if(navigator.serviceWorker&&navigator.serviceWorker.controller){
-    navigator.serviceWorker.controller.postMessage({type:'KNOWN_ORDERS',nums:Array.from(_knownOrderNums||[])});
-  }
+  // Keep SW in sync with our known set
+  try {
+    if(navigator.serviceWorker&&navigator.serviceWorker.controller){
+      navigator.serviceWorker.controller.postMessage({type:'KNOWN_ORDERS',nums:Array.from(_knownOrderNums)});
+    }
+  } catch(e){}
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1422,8 +1657,14 @@ async function markDone(orderNum){
   // Step 2: Record locally so Firebase listener never reverts this
   _doneLocally[orderNum]=doneAt;
 
-  // Step 3: Remove from known pending set
+  // Step 3: Remove from known pending set (page + SW)
   if(_knownOrderNums) _knownOrderNums.delete(orderNum);
+  // Tell SW so it doesn't re-alert for this order
+  try {
+    if(navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'ORDER_MARKED_DONE', orderNum: String(orderNum) });
+    }
+  } catch(e) {}
 
   // Step 4: Save to cache
   cacheOrders(_allOrders);
@@ -1492,108 +1733,78 @@ async function updateOrderStatus(orderNum, newStatus){
 var _lastBellTime = 0;
 var _bellInterval = null;
 
+// ── Sharp DING alarm — plays immediately when AudioContext is running ──
+function _doAlarm(ctx) {
+  try {
+    var t  = ctx.currentTime;
+
+    function ding(startT, freq, vol) {
+      var osc   = ctx.createOscillator();
+      var gain  = ctx.createGain();
+      var wave  = ctx.createWaveShaper();
+      var curve = new Float32Array(256);
+      for (var i = 0; i < 256; i++) {
+        var x = (i * 2) / 256 - 1;
+        curve[i] = (Math.PI + 300) * x / (Math.PI + 300 * Math.abs(x));
+      }
+      wave.curve = curve;
+      osc.connect(gain); gain.connect(wave); wave.connect(ctx.destination);
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(freq, startT);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.85, startT + 0.3);
+      gain.gain.setValueAtTime(0, startT);
+      gain.gain.linearRampToValueAtTime(vol, startT + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.001, startT + 0.45);
+      osc.start(startT); osc.stop(startT + 0.5);
+
+      var osc2  = ctx.createOscillator();
+      var gain2 = ctx.createGain();
+      osc2.connect(gain2); gain2.connect(ctx.destination);
+      osc2.type = 'square';
+      osc2.frequency.setValueAtTime(freq * 2, startT);
+      gain2.gain.setValueAtTime(0, startT);
+      gain2.gain.linearRampToValueAtTime(vol * 0.3, startT + 0.005);
+      gain2.gain.exponentialRampToValueAtTime(0.001, startT + 0.2);
+      osc2.start(startT); osc2.stop(startT + 0.25);
+    }
+
+    // 3 rounds of DING-DING-DING, escalating pitch
+    ding(t + 0.00, 1200, 1.2); ding(t + 0.22, 1200, 1.2); ding(t + 0.44, 1400, 1.4);
+    ding(t + 0.80, 1200, 1.2); ding(t + 1.02, 1200, 1.2); ding(t + 1.24, 1400, 1.4);
+    ding(t + 1.60, 1200, 1.2); ding(t + 1.82, 1400, 1.4); ding(t + 2.04, 1600, 1.6);
+  } catch(e) { console.warn('[Bell] alarm error:', e); }
+}
+
 function playAlertBell() {
   var now = Date.now();
-  if (now - _lastBellTime < 1500) return;
+  // Debounce: don't stack if bell already fired in last 200ms
+  if (now - _lastBellTime < 200) return;
   _lastBellTime = now;
 
-  // ── Strong vibration pattern (works even on silent mode) ──
+  // ── Vibration (works even on silent mode) ──
+  try { if (navigator.vibrate) navigator.vibrate([400,100,400,100,600,200,400,100,400]); } catch(e){}
+
+  // ── Audio ──
   try {
-    if (navigator.vibrate) {
-      navigator.vibrate([400, 100, 400, 100, 600, 200, 400, 100, 400]);
-    }
-  } catch(e){}
-
-  // ── Sharp alarm sound ──
-  function _doAlarm(ctx) {
-    try {
-      var t = ctx.currentTime;
-      var SR = ctx.sampleRate;
-
-      // DING function: sharp attack, fast decay, high frequency
-      function ding(startT, freq, vol) {
-        var osc = ctx.createOscillator();
-        var gain = ctx.createGain();
-        // Add slight distortion via a WaveShaper for sharpness
-        var wave = ctx.createWaveShaper();
-        var curve = new Float32Array(256);
-        for (var i = 0; i < 256; i++) {
-          var x = (i * 2) / 256 - 1;
-          curve[i] = (Math.PI + 300) * x / (Math.PI + 300 * Math.abs(x));
-        }
-        wave.curve = curve;
-
-        osc.connect(gain);
-        gain.connect(wave);
-        wave.connect(ctx.destination);
-
-        // Sharp metallic bell: mix of frequency and 2x harmonic
-        osc.type = 'sawtooth'; // sawtooth = much sharper than sine
-        osc.frequency.setValueAtTime(freq, startT);
-        osc.frequency.exponentialRampToValueAtTime(freq * 0.85, startT + 0.3);
-
-        // Very fast attack (instant), medium decay
-        gain.gain.setValueAtTime(0, startT);
-        gain.gain.linearRampToValueAtTime(vol, startT + 0.008); // 8ms attack = very sharp
-        gain.gain.exponentialRampToValueAtTime(0.001, startT + 0.45); // 450ms decay
-
-        osc.start(startT);
-        osc.stop(startT + 0.5);
-
-        // Second oscillator: one octave up for brightness
-        var osc2 = ctx.createOscillator();
-        var gain2 = ctx.createGain();
-        osc2.connect(gain2);
-        gain2.connect(ctx.destination);
-        osc2.type = 'square';
-        osc2.frequency.setValueAtTime(freq * 2, startT);
-        gain2.gain.setValueAtTime(0, startT);
-        gain2.gain.linearRampToValueAtTime(vol * 0.3, startT + 0.005);
-        gain2.gain.exponentialRampToValueAtTime(0.001, startT + 0.2);
-        osc2.start(startT);
-        osc2.stop(startT + 0.25);
-      }
-
-      // Play 3 sharp DING-DING-DINGs then silence then repeat
-      // Round 1: 3 dings
-      ding(t + 0.00, 1200, 1.2);
-      ding(t + 0.22, 1200, 1.2);
-      ding(t + 0.44, 1400, 1.4); // last one higher = more urgent
-      // Round 2 (after short pause)
-      ding(t + 0.80, 1200, 1.2);
-      ding(t + 1.02, 1200, 1.2);
-      ding(t + 1.24, 1400, 1.4);
-      // Round 3
-      ding(t + 1.60, 1200, 1.2);
-      ding(t + 1.82, 1400, 1.4);
-      ding(t + 2.04, 1600, 1.6); // final highest = most urgent
-
-    } catch(e) { console.warn('bell error:', e); }
-  }
-
-  // Get or create audio context
-  try {
-    var ctx = window._sharedAudioCtx;
-    if (!ctx) {
-      ctx = new (window.AudioContext || window.webkitAudioContext)();
-      window._sharedAudioCtx = ctx;
-    }
+    var AC  = window.AudioContext || window.webkitAudioContext;
+    var ctx = window._sharedAudioCtx || (AC ? new AC() : null);
+    if (!ctx) return;
+    window._sharedAudioCtx = ctx;
     _audioCtx = ctx;
 
-    if (ctx.state === 'suspended') {
-      // Force resume — if it fails we can't play (browser rule)
-      ctx.resume().then(function() {
-        _doAlarm(ctx);
-        window._audioUnlocked = true;
-      }).catch(function(e) {
-        console.warn('[Bell] AudioContext resume failed — user must tap first:', e.message);
-      });
-    } else {
+    if (ctx.state === 'running') {
       _doAlarm(ctx);
+    } else if (ctx.state === 'suspended') {
+      ctx.resume().then(function() {
+        window._audioUnlocked = true;
+        _doAlarm(ctx);
+      }).catch(function(err) {
+        console.warn('[Bell] AudioContext blocked — needs user tap first:', err.message);
+      });
     }
   } catch(e) { console.warn('[Bell] Audio error:', e); }
 
-  // ── Repeat bell 3 times total (4s apart) for persistence ──
+  // ── Repeat 2 more times, 4s apart, for persistence ──
   clearInterval(_bellInterval);
   var _bellCount = 0;
   _bellInterval = setInterval(function() {
@@ -1601,9 +1812,9 @@ function playAlertBell() {
     if (_bellCount >= 2) { clearInterval(_bellInterval); _bellInterval = null; return; }
     try {
       var ctx2 = window._sharedAudioCtx;
-      if (ctx2 && ctx2.state === 'running') _doAlarm.call(null, ctx2);
+      if (ctx2 && ctx2.state === 'running') _doAlarm(ctx2);
     } catch(e){}
-    try { if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 600]); } catch(e){}
+    try { if (navigator.vibrate) navigator.vibrate([300,100,300,100,600]); } catch(e){}
   }, 4000);
 }
 
@@ -1624,7 +1835,7 @@ function ringBell(){
 }
 function toggleNotifPanel(){var d=document.getElementById('notif-dot');if(d)d.classList.remove('show');}
 function showNotifToast(msg){
-  // Show in-app toast
+  // Show in-app banner toast
   var toastEl=document.getElementById('notif-toast'),msgEl=document.getElementById('notif-msg');
   if(toastEl){
     if(msgEl) msgEl.textContent=msg;
@@ -1632,23 +1843,25 @@ function showNotifToast(msg){
     clearTimeout(_notifTimer);
     _notifTimer=setTimeout(function(){toastEl.classList.remove('show');},8000);
   }
-  // Fire system notification IMMEDIATELY (no delays)
+  // Fire system notification via SW (works locked screen + background)
+  // FIXED: always send via SW so it also fires when page is in background
   if(window.Notification&&Notification.permission==='granted'){
     var title='🔔 NEW ORDER! Galaxy Restaurant';
-    var VIB=[500,100,500,100,700,200,500,100,500,100,700];
-    // Try direct Notification API first (instant, no SW overhead)
-    try{ new Notification(title,{body:msg,tag:'gmf-order-fg',requireInteraction:false,silent:false,vibrate:VIB}); }catch(e){}
-    // Also fire SW notification for persistent background version
     try{
       if(navigator.serviceWorker&&navigator.serviceWorker.controller){
         navigator.serviceWorker.controller.postMessage({
           type: 'SHOW_NOTIFICATION',
           title: title,
           body:  msg,
-          tag:   'gmf-order-sw'
+          tag:   'gmf-order-page'
         });
+      } else {
+        // Direct fallback when SW not yet active
+        new Notification(title,{body:msg,tag:'gmf-order-fg',requireInteraction:true,silent:false});
       }
-    }catch(e){}
+    }catch(e){
+      try{ new Notification(title,{body:msg,tag:'gmf-order-fg',requireInteraction:true,silent:false}); }catch(e2){}
+    }
   }
 }
 function closeNotifToast(){document.getElementById('notif-toast').classList.remove('show');clearTimeout(_notifTimer);}
@@ -1836,28 +2049,53 @@ function confirmDelete(){
 // QR CODE
 // ══════════════════════════════════════════════════════════════════
 function _getMenuURL(){
-  // Priority 1: manually set SITE_URL
+  // Priority 1: manually set SITE_URL (hardcoded in source)
   if(SITE_URL) return SITE_URL.replace(/\/+$/,'') + '/customer-menu.html';
-  // Priority 2: auto-detect from current page URL (works on Netlify, GitHub Pages, any https host)
+  // Priority 2: saved via UI input (persisted in localStorage)
+  var saved = '';
+  try { saved = localStorage.getItem('gmf_site_url') || ''; } catch(e){}
+  if(saved) return saved.replace(/\/+$/,'') + '/customer-menu.html';
+  // Priority 3: auto-detect from current page URL (works on Netlify, GitHub Pages, any https host)
   var loc = window.location;
-  // If running on a real https host (not file:// or localhost), use it directly
   if(loc.protocol === 'https:' || (loc.protocol === 'http:' && loc.hostname !== 'localhost' && loc.hostname !== '127.0.0.1')){
-    var base = loc.protocol + '//' + loc.host + loc.pathname.replace(/\/[^\/]*$/, '/');
+    var pathname = loc.pathname;
+    var lastSlash = pathname.lastIndexOf('/');
+    var dir = lastSlash >= 0 ? pathname.substring(0, lastSlash + 1) : '/';
+    var base = loc.protocol + '//' + loc.host + dir;
     return base + 'customer-menu.html';
   }
   // Fallback for localhost / file:// — show a warning
   return null;
 }
 
+function saveQRSiteURL(){
+  var input = document.getElementById('qr-site-url-input');
+  if(!input) return;
+  var val = input.value.trim().replace(/\/+$/, '');
+  if(!val){ toast('⚠️ Please paste your website URL first'); return; }
+  if(!val.startsWith('http')){ toast('⚠️ URL must start with https://'); return; }
+  try { localStorage.setItem('gmf_site_url', val); } catch(e){}
+  toast('✅ URL saved!');
+  setQR();
+}
+
 function setQR(){
   var url = _getMenuURL();
   var img=document.getElementById('qr-img'),urlEl=document.getElementById('qr-url');
   var warn=document.getElementById('qr-host-warn');
+  var input=document.getElementById('qr-site-url-input');
+
+  // Pre-fill input with currently saved URL (so owner can see/edit it)
+  if(input && !input.value){
+    var savedBase = '';
+    try { savedBase = localStorage.getItem('gmf_site_url') || SITE_URL || ''; } catch(e){ savedBase = SITE_URL || ''; }
+    if(savedBase) input.value = savedBase.replace(/\/+$/, '');
+  }
+
   if(!url){
-    // Not hosted — show clear warning
     if(warn) warn.style.display='block';
     if(img) img.src='';
-    if(urlEl) urlEl.textContent='⚠️ Upload files to a website first — see instructions below';
+    if(urlEl) urlEl.textContent='⚠️ Paste your website URL above and tap Generate QR';
     return;
   }
   if(warn) warn.style.display='none';
@@ -2131,6 +2369,7 @@ async function _findPrinterChar(server){
 function _uiConnected(name){
   _printerConnected=true; _btReconnecting=false;
   clearTimeout(_btReconnectTimer);
+  savePrinterName(name); // persist across refreshes
   var btn=document.getElementById('printer-connect-btn');
   if(btn){btn.textContent='✕ Disconnect '+name;btn.classList.add('connected');}
   var dot=document.getElementById('printer-dot');if(dot)dot.className='printer-dot connected';
@@ -2144,7 +2383,10 @@ function _uiDisconnected(){
   var btn=document.getElementById('printer-connect-btn');
   if(btn){btn.textContent='📶 Connect Printer';btn.classList.remove('connected');}
   var dot=document.getElementById('printer-dot');if(dot)dot.className='printer-dot';
-  var txt=document.getElementById('printer-status-text');if(txt)txt.textContent='Not connected';
+  // Show last known printer name as hint if we have one saved
+  var savedName=localStorage.getItem('gmf_printer_name');
+  var txt=document.getElementById('printer-status-text');
+  if(txt)txt.textContent=savedName?'Not connected (last: '+savedName+')':'Not connected';
   document.getElementById('print-all-btn').disabled=true;
   updateStatusBar();
 }
@@ -2158,6 +2400,7 @@ function _scheduleReconnect(){
     if(!_btDeviceName||_printerConnected){_btReconnecting=false;return;}
     if(attempts>=MAX){
       _btReconnecting=false;_btDevice=null;_btDeviceName=null;_btProfile=null;
+      savePrinterName(null);
       toast('❌ Reconnect failed. Tap Connect Printer again.');
       _uiDisconnected();return;
     }
@@ -2169,9 +2412,12 @@ function _scheduleReconnect(){
           _btChar=char;_uiConnected(_btDeviceName);toast('✅ Printer reconnected!');
         })
         .catch(function(){_btReconnectTimer=setTimeout(tryConnect,3000);});
-    } else {_btReconnecting=false;}
+    } else {
+      // _btDevice reference lost (page refreshed) — can't reconnect without user gesture
+      _btReconnecting=false;
+    }
   }
-  _btReconnectTimer=setTimeout(tryConnect,1500);
+  _btReconnectTimer=setTimeout(tryConnect,1000);
 }
 
 async function togglePrinterConnect(){
@@ -2179,6 +2425,7 @@ async function togglePrinterConnect(){
   if(_printerConnected){
     clearTimeout(_btReconnectTimer);
     _btReconnecting=false;_btDeviceName=null;_btProfile=null;
+    savePrinterName(null); // forget printer on manual disconnect
     try{if(_btDevice&&_btDevice.gatt.connected)_btDevice.gatt.disconnect();}catch(e){}
     _printerConnected=false;_btDevice=null;_btChar=null;
     _uiDisconnected();toast('Printer disconnected');return;
@@ -2220,6 +2467,7 @@ async function togglePrinterConnect(){
 
     _btDevice=device;
     _btDeviceName=device.name||'Printer';
+    savePrinterName(_btDeviceName);  // persist so status survives page refresh
     if(btn) btn.textContent='🔗 Connecting…';
     toast('🔗 Connecting to '+_btDeviceName+'…');
 
@@ -2236,7 +2484,8 @@ async function togglePrinterConnect(){
         toast('⚠️ Printer lost — reconnecting…');
         _scheduleReconnect();
       } else {
-        _uiDisconnected();toast('Printer disconnected');
+        _uiDisconnected();
+        toast('Printer disconnected. Tap Connect to reconnect.');
       }
     });
 

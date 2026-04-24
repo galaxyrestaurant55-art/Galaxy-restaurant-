@@ -1,23 +1,27 @@
 /* ═══════════════════════════════════════════════════════════════════
-   GALAXY RESTAURANT — Service Worker v4
-   • PRIMARY:  Firebase SSE stream — true push, ~100ms latency
-   • FALLBACK: 800ms polling if SSE fails/unsupported
-   • Auto-print trigger sent instantly when new order detected
-   • Background notifications with vibration
+   GALAXY RESTAURANT — Service Worker v6 (ALL BUGS FIXED)
+   • Firebase SSE stream — true push, ~100ms latency
+   • 1s safety-net poll alongside SSE (catches any gaps)
+   • Instant background notifications + vibration
+   • Auto-print queue — stored in Cache API
+   • NO double-alerts, NO race conditions
+   • Reconnects SSE automatically on drop
 ═══════════════════════════════════════════════════════════════════ */
 
 var DB_URL     = 'https://galaxy-pos-3bbc7-default-rtdb.asia-southeast1.firebasedatabase.app';
-var CACHE_NAME = 'galaxy-pos-v6';
+var CACHE_NAME = 'galaxy-pos-v8';
 
-var _knownNums    = null;   // Set of order nums already seen
-var _printedNums  = {};     // mirrors _autoPrintPrinted from main page
-var _autoPrint    = false;  // mirrors owner setting
-var _pollTimer    = null;
-var _sseAbort     = null;   // AbortController for SSE fetch
-var _sseFailed    = false;  // true if SSE not supported / keeps erroring
+var _knownNums   = null;   // null = not initialized; Set after first data
+var _printedNums = {};
+var _autoPrint   = false;
+var _pollTimer   = null;
+var _sseAbort    = null;
+var _sseFailed   = false;
+var _safetyTimer = null;
+var _fbActiveOnPage = false; // true when page owns the Firebase SSE
 
-var POLL_MS_FAST  = 800;    // fallback poll when SSE is down
-var POLL_MS_SLOW  = 3000;   // safety-net poll alongside SSE
+var POLL_MS_SAFETY = 1500;  // faster safety poll
+var POLL_MS_FAST   = 800;
 
 var APP_SHELL = [
   './owner.html',
@@ -25,7 +29,7 @@ var APP_SHELL = [
   'https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Lato:wght@300;400;700&display=swap'
 ];
 
-/* ── Install: cache app shell ── */
+/* ── Install ── */
 self.addEventListener('install', function(e) {
   self.skipWaiting();
   e.waitUntil(
@@ -35,6 +39,7 @@ self.addEventListener('install', function(e) {
   );
 });
 
+/* ── Activate ── */
 self.addEventListener('activate', function(e) {
   e.waitUntil(
     caches.keys().then(function(keys) {
@@ -47,30 +52,49 @@ self.addEventListener('activate', function(e) {
   startListening();
 });
 
-/* ── Message from main page ── */
+/* ── Messages from main page ── */
 self.addEventListener('message', function(e) {
   if (!e.data) return;
   switch(e.data.type) {
+
     case 'KNOWN_ORDERS':
-      _knownNums = new Set(e.data.nums || []);
+      // Page syncing its known orders to SW
+      if (_knownNums === null) {
+        _knownNums = new Set((e.data.nums || []).map(String));
+      } else {
+        (e.data.nums || []).forEach(function(n){ _knownNums.add(String(n)); });
+      }
       break;
+
     case 'AUTO_PRINT':
       _autoPrint = !!e.data.enabled;
       break;
+
     case 'PRINTED_NUMS':
-      // Sync already-printed set so SW never double-prints across restarts
       _printedNums = e.data.nums || {};
       break;
+
     case 'START_POLL':
       startListening();
       break;
+
     case 'STOP_POLL':
-      stopAll();
-      break;
-    case 'FIREBASE_ACTIVE':
-      // Owner page Firebase listener active — keep SW running at slow safety rate
+      _stopSSE();
       _startSafetyPoll();
       break;
+
+    case 'FIREBASE_ACTIVE':
+      // Page owns Firebase SSE — SW runs safety-net poll only
+      _fbActiveOnPage = true;
+      _startSafetyPoll();
+      break;
+
+    case 'FIREBASE_INACTIVE':
+      // Page lost Firebase — SW should take over
+      _fbActiveOnPage = false;
+      startListening();
+      break;
+
     case 'SHOW_NOTIFICATION':
       if (e.data.title) {
         self.registration.showNotification(e.data.title, {
@@ -86,45 +110,48 @@ self.addEventListener('message', function(e) {
         });
       }
       break;
+
     case 'CLEAR_PRINT_QUEUE':
-      // Page successfully printed — clear the saved queue
       _clearPrintQueue();
       break;
+
     case 'GET_PRINT_QUEUE':
-      // Page asking for queued print jobs (called on focus/load)
       _loadPrintQueue().then(function(orders) {
         if (orders && orders.length > 0) {
-          // Send queue to page then clear it
-          self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(cs) {
-            cs.forEach(function(c) {
-              c.postMessage({ type: 'PRINT_QUEUE', orders: orders });
-            });
-          });
+          _broadcastToClients({ type: 'PRINT_QUEUE', orders: orders });
           _clearPrintQueue();
         }
       });
+      break;
+
+    case 'ORDER_MARKED_DONE':
+      if (_knownNums && e.data.orderNum) {
+        _knownNums.delete(String(e.data.orderNum));
+      }
       break;
   }
 });
 
 /* ══════════════════════════════════════════════════════════════════
-   MAIN ENTRY — try SSE first, fall back to fast polling
+   MAIN ENTRY
 ══════════════════════════════════════════════════════════════════ */
 function startListening() {
-  stopAll();
-  _startSSE();
+  _stopAll();
+  if (!_sseFailed) {
+    _startSSE();
+  } else {
+    _startFastPoll();
+  }
 }
 
-function stopAll() {
-  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+function _stopAll() {
+  if (_pollTimer)   { clearInterval(_pollTimer);   _pollTimer   = null; }
+  if (_safetyTimer) { clearInterval(_safetyTimer); _safetyTimer = null; }
   _stopSSE();
 }
 
 /* ══════════════════════════════════════════════════════════════════
    FIREBASE SSE STREAM
-   Firebase Realtime Database natively supports Server-Sent Events.
-   GET /orders.json with Accept: text/event-stream returns a live
-   push stream — every write is pushed in ~100ms, zero polling cost.
 ══════════════════════════════════════════════════════════════════ */
 function _startSSE() {
   try {
@@ -143,25 +170,25 @@ function _startSSE() {
   }).then(function(res) {
     if (!res.ok || !res.body) throw new Error('SSE not available');
 
-    // SSE stream live — run slow safety-net poll in parallel
+    // SSE stream is up — run safety poll alongside it
     _startSafetyPoll();
 
-    var reader = res.body.getReader();
+    var reader  = res.body.getReader();
     var decoder = new TextDecoder();
-    var buf = '';
+    var buf     = '';
+    var isFirstEvent = true;
 
     function pump() {
       return reader.read().then(function(chunk) {
         if (chunk.done) {
-          // Stream closed by server — reconnect after brief pause
+          // Stream ended — restart after short delay
           setTimeout(_startSSE, 1500);
           return;
         }
         buf += decoder.decode(chunk.value, { stream: true });
 
-        // SSE format: "event: put\ndata: {\"path\":\"/\",\"data\":{...}}\n\n"
         var events = buf.split('\n\n');
-        buf = events.pop(); // keep incomplete trailing chunk
+        buf = events.pop();
 
         events.forEach(function(block) {
           var evtType = '', evtData = '';
@@ -169,26 +196,30 @@ function _startSSE() {
             if (ln.indexOf('event:') === 0) evtType = ln.slice(6).trim();
             if (ln.indexOf('data:')  === 0) evtData = ln.slice(5).trim();
           });
+
           if ((evtType === 'put' || evtType === 'patch') && evtData) {
             try {
               var parsed = JSON.parse(evtData);
-              // Firebase SSE: { path: '/', data: { orderNum: {...}, ... } }
-              // On initial load path='/' data=full tree; on change path='/orderNum' data=order
+              var silent = false;
+
               if (parsed && parsed.path === '/' && parsed.data) {
-                _handleOrdersObject(parsed.data);
+                // First full-snapshot — initialize silently, no alerts
+                if (isFirstEvent) { silent = true; isFirstEvent = false; }
+                _handleOrdersObject(parsed.data, silent);
               } else if (parsed && parsed.path && parsed.path !== '/' && parsed.data) {
-                // Single order update — wrap into object keyed by path
+                // Single-order partial update — always alert if new
                 var key = parsed.path.replace(/^\//, '');
                 var partial = {};
                 partial[key] = parsed.data;
-                _handleOrdersObject(partial);
+                _handleOrdersObject(partial, false);
               }
-            } catch(ex) { /* malformed chunk */ }
+            } catch(ex) {}
           }
         });
         return pump();
       }).catch(function(err) {
-        if (err && err.name === 'AbortError') return; // intentional stop
+        if (err && err.name === 'AbortError') return;
+        // SSE failed — fall back to fast poll
         _sseFailed = true;
         _startFastPoll();
       });
@@ -206,13 +237,11 @@ function _stopSSE() {
   if (_sseAbort) { try { _sseAbort.abort(); } catch(e){} _sseAbort = null; }
 }
 
-/* ── Safety-net poll alongside SSE (catches any SSE gaps) ── */
 function _startSafetyPoll() {
-  if (_pollTimer) clearInterval(_pollTimer);
-  _pollTimer = setInterval(_pollOnce, POLL_MS_SLOW);
+  if (_safetyTimer) clearInterval(_safetyTimer);
+  _safetyTimer = setInterval(_pollOnce, POLL_MS_SAFETY);
 }
 
-/* ── Fast poll (SSE unavailable fallback) ── */
 function _startFastPoll() {
   _stopSSE();
   if (_pollTimer) clearInterval(_pollTimer);
@@ -220,28 +249,29 @@ function _startFastPoll() {
   _pollOnce();
 }
 
+var _polling = false;
 function _pollOnce() {
+  if (_polling) return;
+  _polling = true;
   fetch(DB_URL + '/orders.json?t=' + Date.now(), { cache: 'no-store' })
     .then(function(r) { return r.ok ? r.json() : null; })
-    .then(function(data) { if (data) _handleOrdersObject(data); })
-    .catch(function() {});
+    .then(function(data) {
+      _polling = false;
+      if (data) _handleOrdersObject(data, false);
+    })
+    .catch(function() { _polling = false; });
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   PENDING PRINT QUEUE — stored in Cache API (no IndexedDB needed)
-   Orders waiting to be printed are saved here. When app opens or
-   comes to foreground, it reads this queue and prints immediately.
+   PRINT QUEUE
 ══════════════════════════════════════════════════════════════════ */
-var PRINT_QUEUE_KEY = 'gmf-print-queue';
+var PRINT_QUEUE_KEY = 'gmf-print-queue-v2';
 
 function _savePrintQueue(orders) {
-  // Store as a fake Response in the cache — zero-cost KV store
-  var data = JSON.stringify(orders);
   caches.open(CACHE_NAME).then(function(c) {
-    c.put(new Request(PRINT_QUEUE_KEY), new Response(data));
+    c.put(new Request(PRINT_QUEUE_KEY), new Response(JSON.stringify(orders)));
   }).catch(function(){});
 }
-
 function _loadPrintQueue() {
   return caches.open(CACHE_NAME).then(function(c) {
     return c.match(new Request(PRINT_QUEUE_KEY));
@@ -250,7 +280,6 @@ function _loadPrintQueue() {
     return res.json().catch(function(){ return []; });
   }).catch(function(){ return []; });
 }
-
 function _clearPrintQueue() {
   caches.open(CACHE_NAME).then(function(c) {
     c.delete(new Request(PRINT_QUEUE_KEY));
@@ -258,9 +287,16 @@ function _clearPrintQueue() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   CORE ORDER PROCESSING — called by both SSE and poll paths
+   CORE ORDER PROCESSING
+   silent=true  → first load: just initialize knownNums, no alerts
+   silent=false → subsequent updates: alert on genuinely new orders
+
+   KEY FIX: When _fbActiveOnPage is true, the page owns the Firebase
+   SSE and handles alert/print itself. SW only sends notifications
+   (system-level) so the phone rings even in background. It does NOT
+   broadcast NEW_ORDERS or SW_ORDERS_UPDATE to avoid double-alerts.
 ══════════════════════════════════════════════════════════════════ */
-function _handleOrdersObject(data) {
+function _handleOrdersObject(data, silent) {
   if (!data || typeof data !== 'object') return;
 
   var orders = [];
@@ -268,46 +304,54 @@ function _handleOrdersObject(data) {
     if (data[k] && !data[k].init) orders.push(data[k]);
   });
 
-  var pending  = orders.filter(function(o) { return o.status === 'pending'; });
-  var nums     = pending.map(function(o) { return o.orderNum; });
+  var pending = orders.filter(function(o) { return o.status === 'pending'; });
+  var nums    = pending.map(function(o) { return String(o.orderNum); });
 
+  // First ever call — initialize known set without alerting
   if (_knownNums === null) {
     _knownNums = new Set(nums);
-    broadcastToClients({ type: 'SW_READY', nums: nums });
+    if (!_fbActiveOnPage) {
+      _broadcastToClients({ type: 'SW_READY', nums: nums });
+      _broadcastToClients({ type: 'SW_ORDERS_UPDATE', allPending: pending });
+    }
     return;
   }
 
-  var newOrders = pending.filter(function(o) { return !_knownNums.has(o.orderNum); });
-  newOrders.forEach(function(o) { _knownNums.add(o.orderNum); });
-  if (newOrders.length === 0) return;
+  // Push live order list to page when page is NOT using Firebase directly
+  if (!_fbActiveOnPage) {
+    _broadcastToClients({ type: 'SW_ORDERS_UPDATE', allPending: pending });
+  }
 
-  // ── 1. Tell main page immediately (UI repaint + foreground bell + foreground print) ──
-  broadcastToClients({ type: 'NEW_ORDERS', orders: newOrders, allPending: pending });
+  // Determine genuinely new orders
+  var newOrders = pending.filter(function(o) {
+    return !_knownNums.has(String(o.orderNum));
+  });
+  newOrders.forEach(function(o) { _knownNums.add(String(o.orderNum)); });
 
-  // ── 2. Auto-print logic ──
-  // Web Bluetooth CANNOT run from SW or background page.
-  // Solution:
-  //   • If page is VISIBLE → page handles print itself via AUTO_PRINT_TRIGGER
-  //   • If page is BACKGROUND/CLOSED → save to print queue in cache, fire notification
-  //     with "Print Now" action. On tap/open, page reads queue and prints.
+  if (newOrders.length === 0 || silent) return;
+
+  // ── 1. Broadcast to page ONLY when page isn't handling it via Firebase ──
+  if (!_fbActiveOnPage) {
+    _broadcastToClients({ type: 'NEW_ORDERS', orders: newOrders, allPending: pending });
+  }
+
+  // ── 2. Auto-print (always, regardless of who owns Firebase) ──
   if (_autoPrint) {
-    var toPrint = newOrders.filter(function(o) { return !_printedNums[o.orderNum]; });
+    var toPrint = newOrders.filter(function(o) { return !_printedNums[String(o.orderNum)]; });
     if (toPrint.length) {
-      toPrint.forEach(function(o) { _printedNums[o.orderNum] = true; });
+      toPrint.forEach(function(o) { _printedNums[String(o.orderNum)] = true; });
 
-      // Check if any owner window is visible (foreground)
       self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clients) {
         var appVisible = clients.some(function(c) {
           return c.url.indexOf('owner') !== -1 && c.visibilityState === 'visible';
         });
 
         if (appVisible) {
-          // Page is in foreground — send trigger, page will use BT directly
-          broadcastToClients({ type: 'AUTO_PRINT_TRIGGER', orders: toPrint });
+          // Page is open & visible — trigger print on it
+          _broadcastToClients({ type: 'AUTO_PRINT_TRIGGER', orders: toPrint });
         } else {
-          // Page is background/closed — save queue so app prints on next open/focus
+          // Queue for when page opens
           _loadPrintQueue().then(function(existing) {
-            // Merge, deduplicate by orderNum
             var merged = existing.slice();
             toPrint.forEach(function(o) {
               if (!merged.some(function(e){ return e.orderNum === o.orderNum; })) {
@@ -315,15 +359,13 @@ function _handleOrdersObject(data) {
               }
             });
             _savePrintQueue(merged);
-            // Also send trigger — page will receive it when it comes to foreground
-            broadcastToClients({ type: 'AUTO_PRINT_TRIGGER', orders: toPrint });
           });
         }
       });
     }
   }
 
-  // ── 3. System notification (works on locked screen) ──
+  // ── 3. System notification — ALWAYS fires (locked screen, background) ──
   var appUrl = self.registration.scope + 'owner.html';
   var notifPromises = newOrders.map(function(o) {
     var title = '\uD83D\uDD14 New Order \u2014 Table ' + o.tableNumber;
@@ -331,8 +373,7 @@ function _handleOrdersObject(data) {
                 (Array.isArray(o.items)
                   ? o.items.map(function(i){ return i.qty + 'x ' + i.name; }).join(', ')
                   : '') +
-                ' \u2022 \u20B9' + (o.total || 0) +
-                (_autoPrint ? ' \u2014 Tap "Print Now" to print!' : '');
+                ' \u2022 \u20B9' + (o.total || 0);
     return self.registration.showNotification(title, {
       body:               body,
       tag:                'order-' + o.orderNum,
@@ -349,7 +390,6 @@ function _handleOrdersObject(data) {
       data: { orderNum: o.orderNum, url: appUrl, autoPrint: _autoPrint }
     });
   });
-
   Promise.all(notifPromises).catch(function(){});
 }
 
@@ -359,34 +399,32 @@ self.addEventListener('notificationclick', function(e) {
   var action = e.action;
   var data   = e.notification.data || {};
   var target = data.url || (self.registration.scope + 'owner.html');
-  // For print action, add ?autoprint=1 so page knows to print on load
   if (action === 'print_open') target = target + '?autoprint=1';
 
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(cs) {
-      // Try to find existing owner window
       for (var i = 0; i < cs.length; i++) {
         if (cs[i].url.indexOf('owner') !== -1) {
           cs[i].focus();
-          // Tell the page what action was clicked
           cs[i].postMessage({ type: 'NOTIFICATION_CLICK', action: action, autoPrint: data.autoPrint });
           return;
         }
       }
-      // No window open — open one (will read print queue on load)
       return self.clients.openWindow(target);
     })
   );
 });
 
-/* ── Broadcast to all open owner windows ── */
-function broadcastToClients(msg) {
+/* ── Broadcast helper ── */
+function _broadcastToClients(msg) {
   self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(cs) {
-    cs.forEach(function(c) { c.postMessage(msg); });
+    cs.forEach(function(c) {
+      try { c.postMessage(msg); } catch(e) {}
+    });
   });
 }
 
-/* ── Fetch: cache-first for app shell, never cache Firebase ── */
+/* ── Fetch: cache-first for app shell, pass-through for Firebase ── */
 self.addEventListener('fetch', function(e) {
   if (e.request.method !== 'GET') return;
   if (e.request.url.indexOf(DB_URL) !== -1) return;
