@@ -1133,9 +1133,10 @@ var _btDeviceName = null, _btReconnectTimer = null, _btReconnecting = false;
 var _bc         = null;
 var _fbListener = null;
 var _pollStop = false, _polling = false, _nextPollTimer = null;
-var _allOrders  = [];
-var _doneLocally = {};
-var _markingDone = {};
+var _allOrders    = [];
+var _doneLocally  = {};   // orderNum -> doneAt ISO string (persisted to localStorage)
+var _deletedOrders = {};  // orderNum -> true (persisted — prevents Firebase restoring deleted)
+var _markingDone  = {};
 var _audioCtx    = null;
 
 // ══════════════════════════════════════════════════════════════════
@@ -1153,6 +1154,10 @@ function saveDeleted()  { try{localStorage.setItem('gmf_deleted',  JSON.stringif
 function savePrinterName(name){ try{ if(name) localStorage.setItem('gmf_printer_name',name); else localStorage.removeItem('gmf_printer_name'); }catch(e){} }
 function cacheOrders(o)  { try{localStorage.setItem('gmf_order_cache',JSON.stringify(o));}catch(e){} }
 function getCachedOrders(){ try{return JSON.parse(localStorage.getItem('gmf_order_cache')||'null');}catch(e){return null;} }
+function saveDoneLocally(){ try{localStorage.setItem('gmf_done_local',JSON.stringify(_doneLocally));}catch(e){} }
+function loadDoneLocally(){ try{var d=localStorage.getItem('gmf_done_local');_doneLocally=d?JSON.parse(d):{};}catch(e){_doneLocally={};} }
+function saveDeletedOrders(){ try{localStorage.setItem('gmf_deleted_orders',JSON.stringify(_deletedOrders));}catch(e){} }
+function loadDeletedOrders(){ try{var d=localStorage.getItem('gmf_deleted_orders');_deletedOrders=d?JSON.parse(d):{};}catch(e){_deletedOrders={};} }
 
 // ══════════════════════════════════════════════════════════════════
 // MENU STATE
@@ -1251,7 +1256,7 @@ function switchTab(name){
   document.getElementById(panels[name]).classList.add('active');
   if(name==='menu')      renderMenuManager();
   if(name==='stats')     _updateStats(_allOrders);
-  if(name==='customers') renderCustomerList();
+  if(name==='customers'){ _syncFBCustomers(); renderCustomerList(); }
 }
 function updateClock(){
   var el=document.getElementById('dash-clock');
@@ -1271,7 +1276,6 @@ function startDash(){
   }
   updateStatusBar();
   _rpIds=''; _rdIds='';
-  _doneLocally={};
   _pollStop=false; _polling=false; _pollFirstDone=false;
   _allOrders=[];
 
@@ -1279,6 +1283,11 @@ function startDash(){
   updateClock();
   if(clockInterval) clearInterval(clockInterval);
   clockInterval=setInterval(updateClock,1000);
+
+  // ── Load persisted state FIRST — must happen before ANYTHING uses _doneLocally/_deletedOrders ──
+  loadDoneLocally();       // restores which orders are marked done
+  loadDeletedOrders();     // restores which orders have been deleted
+  _loadFBCustomersCache(); // restores customer data for instant customer tab
 
   // ── Show cached orders INSTANTLY, or skeleton if nothing cached ──
   var cached=getCachedOrders();
@@ -1310,7 +1319,7 @@ function startDash(){
     target.postMessage({ type: 'KNOWN_ORDERS', nums: knownArr });
   }).catch(function(){});
 
-  if(_fbReady){ _startFirebaseListener(); }
+  if(_fbReady){ _startFirebaseListener(); _syncFBCustomers(); }
   else        { _startBroadcastChannel(); _startPolling(); }
 }
 
@@ -1361,11 +1370,15 @@ function _startFirebaseListener(){
       _detectAndAlert(orders);
     } else {
       _fbFirstDone = true;
-      var pending = orders.filter(function(o){ return o.status === 'pending'; });
-      _knownOrderNums = new Set(pending.map(function(o){ return String(o.orderNum); }));
+      // Seed known nums with ALL orders (pending + done) so we never re-alert
+      // for orders that were already present when the dashboard loaded
+      _knownOrderNums = new Set(orders.map(function(o){ return String(o.orderNum); }));
       try {
         if(navigator.serviceWorker && navigator.serviceWorker.controller){
-          navigator.serviceWorker.controller.postMessage({type:'KNOWN_ORDERS', nums: Array.from(_knownOrderNums)});
+          // Only send pending ones to SW (SW only needs to know pending for its alert logic)
+          var pendingNums = orders.filter(function(o){ return o.status==='pending'; })
+                                  .map(function(o){ return String(o.orderNum); });
+          navigator.serviceWorker.controller.postMessage({type:'KNOWN_ORDERS', nums: pendingNums});
         }
       } catch(e){}
     }
@@ -1480,39 +1493,52 @@ async function runPoll(){
   _nextPollTimer=setTimeout(runPoll, hidden?8000:1500);
 }
 
-// Apply local done overrides so Firebase/JSONBin can never revert them
+// Apply local done + deleted overrides so Firebase can NEVER revert them
 function _applyDoneLocally(orders){
-  return orders.map(function(o){
-    var key = String(o.orderNum);
-    if(_doneLocally[key]&&o.status==='pending'){
-      return Object.assign({},o,{status:'done',doneAt:_doneLocally[key]});
-    }
-    return o;
-  });
+  return orders
+    .filter(function(o){
+      // Remove any order the owner has explicitly deleted
+      return !_deletedOrders[String(o.orderNum)];
+    })
+    .map(function(o){
+      var key = String(o.orderNum);
+      if(_doneLocally[key] && o.status !== 'done'){
+        return Object.assign({},o,{status:'done', doneAt: _doneLocally[key]});
+      }
+      // If order is locally done but has no doneAt (edge case), supply one
+      if(_doneLocally[key] && !o.doneAt){
+        return Object.assign({},o,{doneAt: _doneLocally[key]});
+      }
+      return o;
+    });
 }
 
 // ══════════════════════════════════════════════════════════════════
 // DETECT NEW ORDERS & ALERT
 // ══════════════════════════════════════════════════════════════════
 function _detectAndAlert(orders){
-  var now=Date.now();
-  var cleaned=_cleanOrders(orders,now);
-  var pending=cleaned.filter(function(o){return o.status==='pending';});
-  var currentNums=pending.map(function(o){return String(o.orderNum);});
-  var newOrders=[];
-  if(_knownOrderNums!==null){
+  var pending = orders.filter(function(o){ return o.status === 'pending'; });
+  var currentNums = pending.map(function(o){ return String(o.orderNum); });
+  var newOrders = [];
+
+  if(_knownOrderNums !== null){
     currentNums.forEach(function(n){
       if(!_knownOrderNums.has(n)) newOrders.push(n);
     });
   }
-  _knownOrderNums=new Set(currentNums);
 
-  if(newOrders.length>0){
-    var newSet=new Set(newOrders);
-    var newPendingOrders=pending.filter(function(o){return newSet.has(String(o.orderNum));});
-    var latest=newPendingOrders[newPendingOrders.length-1]||pending[pending.length-1];
-    var msg=newOrders.length+' new order'+(newOrders.length>1?'s':'')+' received!'+
-      (latest?' Table '+latest.tableNumber+(latest.customerName?' — '+latest.customerName:'')+' — ₹'+(parseInt(latest.total)||0):'');
+  // Add NEW pending to known set — but never remove done/deleted ones
+  // (removing causes re-alerting when Firebase snapshot re-arrives)
+  currentNums.forEach(function(n){ _knownOrderNums.add(n); });
+
+  if(newOrders.length > 0){
+    var newSet = new Set(newOrders);
+    var newPendingOrders = pending.filter(function(o){ return newSet.has(String(o.orderNum)); });
+    var latest = newPendingOrders[newPendingOrders.length-1] || pending[pending.length-1];
+    var msg = newOrders.length + ' new order' + (newOrders.length > 1 ? 's' : '') + ' received!' +
+      (latest ? ' Table ' + latest.tableNumber +
+        (latest.customerName ? ' — ' + latest.customerName : '') +
+        ' — ₹' + (parseInt(latest.total)||0) : '');
     playAlertBell();
     ringBell();
     showNotifToast(msg);
@@ -1523,16 +1549,18 @@ function _detectAndAlert(orders){
         var card = document.getElementById('card-'+num);
         if(card){
           card.classList.remove('new-flash');
-          void card.offsetWidth; // force reflow
+          void card.offsetWidth;
           card.classList.add('new-flash');
         }
       });
-    }, 50);
+    }, 60);
   }
-  // Keep SW in sync
+
+  // Keep SW in sync with pending-only set
   try {
-    if(navigator.serviceWorker&&navigator.serviceWorker.controller){
-      navigator.serviceWorker.controller.postMessage({type:'KNOWN_ORDERS',nums:Array.from(_knownOrderNums)});
+    if(navigator.serviceWorker && navigator.serviceWorker.controller){
+      var pendingNums = pending.map(function(o){ return String(o.orderNum); });
+      navigator.serviceWorker.controller.postMessage({type:'KNOWN_ORDERS', nums: pendingNums});
     }
   } catch(e){}
 }
@@ -1542,9 +1570,11 @@ function _detectAndAlert(orders){
 // ══════════════════════════════════════════════════════════════════
 function _cleanOrders(orders,now){
   return orders.filter(function(o){
-    if(o.status!=='done') return true;
-    if(!o.doneAt) return false;
-    return (now-new Date(o.doneAt).getTime())<86400000*7; // keep 7 days
+    if(!o || !o.orderNum) return false; // skip malformed
+    if(o.status !== 'done') return true;
+    if(!o.doneAt) return true; // done but no timestamp — keep it visible
+    var age = now - new Date(o.doneAt).getTime();
+    return age < 86400000 * 7; // keep 7 days of done orders
   });
 }
 
@@ -1565,7 +1595,8 @@ function _doPaintOrders(orders){
   var done   =cleaned.filter(function(o){return o.status==='done';});
   var pCount =pending.length;
 
-  if(cleaned.length!==orders.length){ apiPut(cleaned); }
+  // NEVER call apiPut here — painting must never write to backend.
+  // Backend writes happen only from markDone / deleteCompletedOrder / updateOrderStatus.
 
   var badge=document.getElementById('pending-badge');
   if(badge){
@@ -1682,42 +1713,52 @@ function renderCol(colId,list,status){
 async function deleteCompletedOrder(orderNum){
   orderNum = String(orderNum);
 
-  // Instant optimistic removal with smooth collapse
+  // 1. Mark as deleted FIRST in persisted map — Firebase re-sync can never restore it
+  _deletedOrders[orderNum] = true;
+  saveDeletedOrders();
+
+  // 2. Smooth card collapse animation
   var card = document.getElementById('card-'+orderNum);
   if(card){
     var h = card.offsetHeight;
     card.style.maxHeight = h + 'px';
-    card.style.overflow = 'hidden';
-    card.style.transition = 'opacity 0.15s ease, transform 0.15s ease, max-height 0.2s ease 0.1s, margin-bottom 0.2s ease 0.1s, padding 0.2s ease 0.1s';
+    card.style.overflow  = 'hidden';
+    card.style.transition = 'opacity 0.15s ease, transform 0.15s ease, max-height 0.22s ease 0.1s, margin-bottom 0.22s ease 0.1s, padding 0.22s ease 0.1s';
     requestAnimationFrame(function(){
-      card.style.opacity = '0';
-      card.style.transform = 'scale(0.93) translateX(20px)';
+      card.style.opacity   = '0';
+      card.style.transform = 'scale(0.93) translateX(24px)';
       setTimeout(function(){
-        card.style.maxHeight = '0';
+        card.style.maxHeight    = '0';
         card.style.marginBottom = '0';
-        card.style.paddingTop = '0';
-        card.style.paddingBottom = '0';
-      }, 120);
+        card.style.paddingTop   = '0';
+        card.style.paddingBottom= '0';
+      }, 110);
     });
   }
 
-  _allOrders=_allOrders.filter(function(o){ return String(o.orderNum)!==orderNum; });
+  // 3. Remove from in-memory list and clean up local state
+  _allOrders = _allOrders.filter(function(o){ return String(o.orderNum) !== orderNum; });
   delete _doneLocally[orderNum];
+  saveDoneLocally();
   cacheOrders(_allOrders);
 
+  // 4. Repaint after animation completes
   setTimeout(function(){
     _rpIds=''; _rdIds='';
-    _paintOrders(_allOrders);
-  }, 250);
+    _doPaintOrders(_allOrders);
+  }, 260);
 
   toast('🗑️ Order deleted');
+
+  // 5. Remove from backend (fire-and-forget — local state already protects against re-appearance)
   try{
-    if(_fbReady){ await fbRemove(orderNum); }
+    if(_fbReady){ fbRemove(orderNum).catch(function(){}); }
     else{
-      var orders=await jbGet();
-      if(orders){ await jbPut(orders.filter(function(o){ return String(o.orderNum)!==orderNum; })); }
+      jbGet().then(function(orders){
+        if(orders) jbPut(orders.filter(function(o){ return String(o.orderNum) !== orderNum; }));
+      }).catch(function(){});
     }
-  }catch(e){ toast('⚠️ Delete failed — check connection'); }
+  }catch(e){}
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1746,8 +1787,9 @@ async function markDone(orderNum){
   });
   if(!found){ delete _markingDone[orderNum]; return; }
 
-  // Step 2: Record locally so Firebase listener never reverts this
-  _doneLocally[orderNum]=doneAt;
+  // Step 2: Record locally so Firebase listener never reverts this — persist immediately
+  _doneLocally[orderNum] = doneAt;
+  saveDoneLocally();
 
   // Step 3: Remove from known pending set (page + SW)
   if(_knownOrderNums) _knownOrderNums.delete(orderNum);
@@ -1781,13 +1823,14 @@ async function markDone(orderNum){
     toast('✓ Order marked done');
   } catch(e){
     toast('❌ Save failed — tap again');
-    // Revert
+    // Revert in-memory and localStorage
     delete _doneLocally[orderNum];
+    saveDoneLocally();
     _allOrders=_allOrders.map(function(o){
       return String(o.orderNum)===orderNum?Object.assign({},o,{status:'pending',doneAt:null}):o;
     });
     cacheOrders(_allOrders);
-    _rpIds=''; _rdIds='';
+    _rpIds='FORCE'; _rdIds='FORCE';
     _paintOrders(_allOrders);
   } finally {
     delete _markingDone[orderNum];
@@ -2702,30 +2745,87 @@ async function togglePrinterConnect(){
 
 
 // ══════════════════════════════════════════════════════════════════
-// CUSTOMER LIST
+// CUSTOMER LIST — built from orders + Firebase customers node
 // ══════════════════════════════════════════════════════════════════
-function _buildCustomerMap(orders){
-  var map={};
-  orders.forEach(function(o){
-    // Support multiple field name variations from different order sources
-    var phone=(o.customerPhone||o.phone||o.customer_phone||'').toString().trim();
-    var name=(o.customerName||o.name||o.customer_name||'').toString().trim();
-    if(!phone||!name) return;
-    var ts=o.createdAt||o.timestamp||'';
-    if(!map[phone]){
-      map[phone]={name:name,phone:phone,orders:0,lastTable:o.tableNumber,lastTime:ts};
+
+// In-memory customer store — merges order history + Firebase customers node
+var _customersFromFB = {}; // phone -> {name, phone, lastTable, lastOrder}
+
+function _syncFBCustomers(){
+  if(!_fbReady) return;
+  _db.ref('customers').once('value', function(snap){
+    var data = snap.val();
+    if(data && typeof data === 'object'){
+      Object.values(data).forEach(function(c){
+        if(c && c.phone){
+          var key = String(c.phone).replace(/\D/g,'');
+          _customersFromFB[key] = c;
+        }
+      });
     }
-    map[phone].orders++;
-    if(ts>(map[phone].lastTime||'')){
-      map[phone].lastTime=ts;
-      map[phone].lastTable=o.tableNumber;
-      map[phone].name=name;
-    }
-  });
-  return Object.values(map).sort(function(a,b){return b.orders-a.orders;});
+    // Save to localStorage so customer tab works offline
+    try{ localStorage.setItem('gmf_fb_customers', JSON.stringify(_customersFromFB)); }catch(e){}
+    renderCustomerList();
+  }, function(){});
 }
 
-// Deleted customers — persists across app closes via localStorage
+function _loadFBCustomersCache(){
+  try{
+    var d = localStorage.getItem('gmf_fb_customers');
+    if(d) _customersFromFB = JSON.parse(d);
+  }catch(e){ _customersFromFB={}; }
+}
+
+function _buildCustomerMap(orders){
+  // Start with Firebase customers node data (most authoritative)
+  var map = {};
+
+  // Seed from Firebase customers node
+  Object.values(_customersFromFB).forEach(function(c){
+    if(!c || !c.phone) return;
+    var phone = String(c.phone).replace(/\D/g,'').trim();
+    if(!phone) return;
+    map[phone] = {
+      name:      c.name || phone,
+      phone:     phone,
+      orders:    0,
+      lastTable: c.lastTable || '—',
+      lastTime:  c.lastOrder || ''
+    };
+  });
+
+  // Also seed from same-device localStorage written by customer-menu.html
+  try {
+    var localCusts = JSON.parse(localStorage.getItem('gmf_customers_local')||'{}');
+    Object.values(localCusts).forEach(function(c){
+      if(!c || !c.phone) return;
+      var phone = String(c.phone).replace(/\D/g,'').trim();
+      if(!phone || map[phone]) return; // don't override Firebase data
+      map[phone] = { name:c.name||phone, phone:phone, orders:0, lastTable:c.lastTable||'—', lastTime:c.lastOrder||'' };
+    });
+  } catch(e){}
+
+  // Enrich with order history
+  orders.forEach(function(o){
+    var phone = String(o.customerPhone||o.phone||o.customer_phone||'').replace(/\D/g,'').trim();
+    var name  = String(o.customerName||o.name||o.customer_name||'').trim();
+    if(!phone || !name) return;
+    var ts = o.createdAt || o.timestamp || '';
+    if(!map[phone]){
+      map[phone] = {name:name, phone:phone, orders:0, lastTable:o.tableNumber||'—', lastTime:ts};
+    }
+    map[phone].orders++;
+    // Update name + last table if this order is more recent
+    if(!map[phone].lastTime || ts > map[phone].lastTime){
+      map[phone].lastTime  = ts;
+      map[phone].lastTable = o.tableNumber || '—';
+      map[phone].name      = name;
+    }
+  });
+
+  return Object.values(map).sort(function(a,b){ return b.orders - a.orders; });
+}
+
 var _deletedCustomers = [];
 function _loadDeletedCustomers(){
   try{ _deletedCustomers=JSON.parse(localStorage.getItem('gmf_del_custs')||'[]'); }catch(e){ _deletedCustomers=[]; }
@@ -2733,13 +2833,18 @@ function _loadDeletedCustomers(){
 function _saveDeletedCustomers(){
   try{ localStorage.setItem('gmf_del_custs', JSON.stringify(_deletedCustomers)); }catch(e){}
 }
+
 function deleteCustomer(phone){
+  phone = String(phone).replace(/\D/g,'').trim();
   _loadDeletedCustomers();
   if(!_deletedCustomers.includes(phone)){
     _deletedCustomers.push(phone);
     _saveDeletedCustomers();
   }
-  // Instant optimistic removal — animate row out
+  // Remove from FB cache too
+  delete _customersFromFB[phone];
+  try{ localStorage.setItem('gmf_fb_customers', JSON.stringify(_customersFromFB)); }catch(e){}
+  // Animate row out
   var row = document.getElementById('cust-'+phone);
   if(row){
     row.style.transition='opacity 0.18s,transform 0.18s';
@@ -2751,47 +2856,60 @@ function deleteCustomer(phone){
   }
   toast('Customer removed');
 }
+
 function renderCustomerList(){
   _loadDeletedCustomers();
-  var wrap=document.getElementById('customer-list-wrap');
+  _loadFBCustomersCache();
+  var wrap = document.getElementById('customer-list-wrap');
   if(!wrap) return;
-  var customers=_buildCustomerMap(_allOrders).filter(function(c){
-    return !_deletedCustomers.includes(c.phone.toString().trim());
+
+  var customers = _buildCustomerMap(_allOrders).filter(function(c){
+    var phone = String(c.phone).replace(/\D/g,'').trim();
+    return !_deletedCustomers.includes(phone);
   });
+
   if(!customers.length){
     wrap.innerHTML='<div style="padding:32px;text-align:center;color:var(--text3);font-size:13px">No customers yet. Orders from customers will appear here.</div>';
     return;
   }
+
   var frag = document.createDocumentFragment();
   customers.forEach(function(c,i){
-    var waLink='https://wa.me/91'+c.phone;
+    var phone   = String(c.phone).replace(/\D/g,'').trim();
+    var waLink  = 'https://wa.me/91' + phone;
+    var lastStr = c.lastTable && c.lastTable !== '—' ? 'Last: Table ' + c.lastTable : 'No recent order';
+    var orderStr = c.orders > 0 ? c.orders + ' order' + (c.orders > 1 ? 's' : '') : 'Via contacts';
     var row = document.createElement('div');
-    row.className='cust-row';
-    row.id='cust-'+c.phone;
-    row.innerHTML=
-      '<div class="cust-row-info">'+
-        '<div class="cust-row-name">'+(i+1)+'. '+c.name+'</div>'+
-        '<div class="cust-row-phone">📞 '+c.phone+'</div>'+
-        '<div class="cust-row-meta">'+c.orders+' order'+(c.orders>1?'s':'')+' · Last: Table '+c.lastTable+'</div>'+
-      '</div>'+
-      '<div style="display:flex;gap:6px;align-items:center;flex-shrink:0">'+
-        '<a href="'+waLink+'" target="_blank" class="notify-btn" style="text-decoration:none">💬</a>'+
-        '<button data-del-phone="'+c.phone+'" style="background:rgba(224,85,85,0.12);border:1px solid rgba(224,85,85,0.3);color:var(--danger);padding:7px 11px;border-radius:var(--radius2);font-size:14px;cursor:pointer;transition:opacity 0.12s">🗑️</button>'+
+    row.className = 'cust-row';
+    row.id = 'cust-' + phone;
+    row.innerHTML =
+      '<div class="cust-row-info">' +
+        '<div class="cust-row-name">' + (i+1) + '. ' + c.name + '</div>' +
+        '<div class="cust-row-phone">📞 ' + phone + '</div>' +
+        '<div class="cust-row-meta">' + orderStr + ' · ' + lastStr + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;align-items:center;flex-shrink:0">' +
+        '<a href="' + waLink + '" target="_blank" class="notify-btn" style="text-decoration:none" title="WhatsApp">💬</a>' +
+        '<button data-del-phone="' + phone + '" style="background:rgba(224,85,85,0.12);border:1px solid rgba(224,85,85,0.3);color:var(--danger);padding:7px 11px;border-radius:var(--radius2);font-size:14px;cursor:pointer;transition:opacity 0.12s" title="Remove customer">🗑️</button>' +
       '</div>';
     frag.appendChild(row);
   });
-  wrap.innerHTML='';
+  wrap.innerHTML = '';
   wrap.appendChild(frag);
   wrap.querySelectorAll('[data-del-phone]').forEach(function(btn){
-    btn.addEventListener('click',function(){ deleteCustomer(btn.getAttribute('data-del-phone')); });
+    btn.addEventListener('click', function(){ deleteCustomer(btn.getAttribute('data-del-phone')); });
   });
 }
 
 function exportCustomers(){
-  var customers=_buildCustomerMap(_allOrders);
+  _loadDeletedCustomers();
+  var customers=_buildCustomerMap(_allOrders).filter(function(c){
+    return !_deletedCustomers.includes(String(c.phone).replace(/\D/g,'').trim());
+  });
   if(!customers.length){toast('No customers yet');return;}
   var text=customers.map(function(c,i){
-    return (i+1)+'. '+c.name+' — '+c.phone+' ('+c.orders+' orders)';
+    var orderStr=c.orders>0?' ('+c.orders+' order'+(c.orders>1?'s':'')+')'  :'';
+    return (i+1)+'. '+c.name+' — '+c.phone+orderStr;
   }).join('\n');
   navigator.clipboard.writeText(text).then(function(){toast('✓ Customer list copied!');}).catch(function(){toast(text);});
 }

@@ -831,6 +831,28 @@ async function placeOrder() {
     createdAt:     new Date().toISOString()
   };
 
+  // ── SAVE CUSTOMER IMMEDIATELY to localStorage (always works, even offline) ──
+  (function saveCustomerNow(){
+    try {
+      var key = custPhone.replace(/\D/g,'');
+      var existing = {};
+      try { existing = JSON.parse(localStorage.getItem('gmf_customers_local')||'{}'); } catch(e){}
+      existing[key] = { name:custName, phone:custPhone, lastTable:custTable, lastOrder: newOrder.createdAt };
+      localStorage.setItem('gmf_customers_local', JSON.stringify(existing));
+    } catch(e){}
+  })();
+
+  // ── Save customer to Firebase immediately (fire-and-forget, independent of order) ──
+  if (_fbReady && custPhone) {
+    try {
+      var custKey = custPhone.replace(/\D/g,'');
+      _db.ref('customers/' + custKey).set({
+        name: custName, phone: custPhone,
+        lastTable: custTable, lastOrder: newOrder.createdAt
+      }).catch(function(e){ console.warn('[Galaxy] Customer save failed:', e); });
+    } catch(e) {}
+  }
+
   // ── INSTANT UI UPDATE — show confirmation immediately, before network ──
   var placedOrderNum = orderNum;
   var savedCart = Object.assign({}, cart);
@@ -891,18 +913,8 @@ async function placeOrder() {
     }
   }
 
-  // Fire-and-forget side effects
+  // Fire-and-forget Google Sheets log
   try { fetch(SHEET_URL, {method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'}, body:JSON.stringify(Object.assign({action:'addOrder'}, newOrder))}); } catch(e) {}
-
-  if (_fbReady && custPhone) {
-    try {
-      var custKey = custPhone.replace(/\D/g,'');
-      _db.ref('customers/' + custKey).set({
-        name: custName, phone: custPhone,
-        lastTable: custTable, lastOrder: new Date().toISOString()
-      }).catch(function(){});
-    } catch(e) {}
-  }
 }
 
 function closeConfirm() { document.getElementById('confirm-overlay').classList.remove('show'); }
